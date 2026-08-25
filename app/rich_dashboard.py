@@ -8,6 +8,13 @@ def rich_dashboard_html() -> str:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Gesundheitsdaten Dashboard</title>
+<meta name="theme-color" content="#2a78d6">
+<link rel="icon" href="/rich-dashboard-icon.png">
+<link rel="apple-touch-icon" href="/rich-dashboard-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Gesundheit">
+<link rel="manifest" href="/rich-dashboard-manifest.json">
 <script>/*!
  * Chart.js v4.4.4
  * https://www.chartjs.org

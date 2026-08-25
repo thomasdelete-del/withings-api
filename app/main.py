@@ -23,12 +23,14 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     RedirectResponse,
+    Response,
     StreamingResponse,
 )
 
 from app import __version__
 from app.config import Settings, load_settings
 from app.dashboard import dashboard_html
+from app.dashboard_icon import icon_png_bytes
 from app.rich_dashboard import rich_dashboard_html
 from app.db import Database, row_to_api
 from app.importer import import_file
@@ -198,6 +200,24 @@ a{{color:#0759b8}}code{{background:#eee;padding:.15rem .35rem;border-radius:.3re
     @app.get("/rich-dashboard", response_class=HTMLResponse, include_in_schema=False)
     async def rich_dashboard() -> str:
         return rich_dashboard_html()
+
+    @app.get("/rich-dashboard-icon.png", include_in_schema=False)
+    async def rich_dashboard_icon() -> Response:
+        return Response(content=icon_png_bytes(), media_type="image/png")
+
+    @app.get("/rich-dashboard-manifest.json", include_in_schema=False)
+    async def rich_dashboard_manifest() -> dict[str, object]:
+        return {
+            "name": "Gesundheitsdaten Dashboard",
+            "short_name": "Gesundheit",
+            "start_url": "/rich-dashboard",
+            "display": "standalone",
+            "background_color": "#f9f9f7",
+            "theme_color": "#2a78d6",
+            "icons": [
+                {"src": "/rich-dashboard-icon.png", "sizes": "192x192", "type": "image/png"},
+            ],
+        }
 
     @app.get("/health", tags=["Betrieb"])
     async def health() -> dict[str, object]:
