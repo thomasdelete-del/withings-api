@@ -29,6 +29,7 @@ from fastapi.responses import (
 from app import __version__
 from app.config import Settings, load_settings
 from app.dashboard import dashboard_html
+from app.rich_dashboard import rich_dashboard_html
 from app.db import Database, row_to_api
 from app.importer import import_file
 from app.models import MEASURE_TYPES
@@ -185,7 +186,7 @@ a{{color:#0759b8}}code{{background:#eee;padding:.15rem .35rem;border-radius:.3re
 <body><h1>Withings REST API</h1>
 <p>Withings-Konto: <strong>{connection_text}</strong><br>Konfiguration: {setup_text}</p>
 <p><a href="/oauth/start">Withings-Konto verbinden</a> ·
-<a href="/dashboard">Dashboard</a> · <a href="/admin/status">Status</a> ·
+<a href="/dashboard">Dashboard</a> · <a href="/rich-dashboard">Dashboard (erweitert)</a> · <a href="/admin/status">Status</a> ·
 <a href="/docs">API-Dokumentation</a></p>
 <p>Geschützte API-Aufrufe benötigen den Header <code>X-API-Key</code>.</p>
 </body></html>"""
@@ -193,6 +194,10 @@ a{{color:#0759b8}}code{{background:#eee;padding:.15rem .35rem;border-radius:.3re
     @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
     async def dashboard() -> str:
         return dashboard_html()
+
+    @app.get("/rich-dashboard", response_class=HTMLResponse, include_in_schema=False)
+    async def rich_dashboard() -> str:
+        return rich_dashboard_html()
 
     @app.get("/health", tags=["Betrieb"])
     async def health() -> dict[str, object]:
