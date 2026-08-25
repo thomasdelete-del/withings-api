@@ -127,9 +127,9 @@ def rich_dashboard_html() -> str:
     background: var(--surface-1); border:1px solid var(--border); border-radius: 10px;
     padding: 10px 12px; margin-bottom: 18px;
   }
-  .filter-group { display:flex; align-items:center; gap:6px; }
+  .filter-group { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
   .filter-label { font-size: 12px; color: var(--text-muted); margin-right:2px; }
-  .pill-group { display:flex; gap:2px; background: var(--surface-2); border-radius:7px; padding:2px; }
+  .pill-group { display:flex; flex-wrap:wrap; gap:2px; background: var(--surface-2); border-radius:7px; padding:2px; }
   .pill {
     border:none; background:transparent; color: var(--text-secondary); font-size:12.5px;
     padding:6px 11px; border-radius:5px; cursor:pointer; font-family:inherit; white-space:nowrap;
