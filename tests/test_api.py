@@ -8,7 +8,7 @@ from app.config import Settings
 from app.main import create_app
 
 
-def _settings(tmp_path: Path) -> Settings:
+def _settings(tmp_path: Path, cors_allow_origins: str = "") -> Settings:
     return Settings(
         database_path=tmp_path / "test.db",
         base_url="https://example.test",
@@ -23,6 +23,7 @@ def _settings(tmp_path: Path) -> Settings:
         sync_interval_minutes=30,
         import_timezone="Europe/Berlin",
         max_upload_mib=2,
+        cors_allow_origins=cors_allow_origins,
     )
 
 
@@ -58,3 +59,33 @@ def test_health_auth_and_import(tmp_path: Path) -> None:
         )
         assert weight.status_code == 200
         assert weight.json()["count"] == 1
+
+
+def test_cors_disabled_by_default(tmp_path: Path) -> None:
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        response = client.get(
+            "/api/v1/latest",
+            headers={"X-API-Key": "test-api-key", "Origin": "null"},
+        )
+        assert "access-control-allow-origin" not in response.headers
+
+
+def test_cors_preflight_allowed_when_configured(tmp_path: Path) -> None:
+    with TestClient(create_app(_settings(tmp_path, cors_allow_origins="*"))) as client:
+        preflight = client.options(
+            "/api/v1/latest",
+            headers={
+                "Origin": "null",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "X-API-Key",
+            },
+        )
+        assert preflight.status_code == 200
+        assert preflight.headers["access-control-allow-origin"] == "*"
+
+        response = client.get(
+            "/api/v1/latest",
+            headers={"X-API-Key": "test-api-key", "Origin": "null"},
+        )
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == "*"

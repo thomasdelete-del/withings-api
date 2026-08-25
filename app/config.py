@@ -34,10 +34,22 @@ class Settings:
     sync_interval_minutes: int
     import_timezone: str
     max_upload_mib: int
+    cors_allow_origins: str = ""
 
     @property
     def callback_url(self) -> str:
         return self.withings_redirect_uri or f"{self.base_url}/oauth/callback"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """Parsed CORS_ALLOW_ORIGINS: '' -> disabled, '*' -> any origin,
+        or a comma-separated allowlist of exact origins."""
+        raw = self.cors_allow_origins.strip()
+        if not raw:
+            return []
+        if raw == "*":
+            return ["*"]
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
     @property
     def missing_setup(self) -> list[str]:
@@ -68,4 +80,5 @@ def load_settings() -> Settings:
         sync_interval_minutes=max(5, _integer("SYNC_INTERVAL_MINUTES", 30)),
         import_timezone=os.getenv("IMPORT_TIMEZONE", "Europe/Berlin").strip(),
         max_upload_mib=max(1, _integer("MAX_UPLOAD_MIB", 25)),
+        cors_allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "").strip(),
     )

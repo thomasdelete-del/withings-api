@@ -95,6 +95,21 @@ Unter **Variables** eintragen:
 
 Die Withings-Zugangsdaten kommen im nächsten Schritt hinzu.
 
+### Optional: CORS für ein im Browser geöffnetes Dashboard
+
+Standardmäßig blockiert der Browser `fetch()`-Aufrufe von einer anderen Seite (auch von
+einer lokal geöffneten HTML-Datei, `file://`) gegen diese API — es fehlt der
+`Access-Control-Allow-Origin`-Header. Wer ein Dashboard hat, das die API direkt aus dem
+Browser abruft, muss dafür `CORS_ALLOW_ORIGINS` in Railway setzen:
+
+| Variable | Wert |
+| --- | --- |
+| `CORS_ALLOW_ORIGINS` | `*` (jede Seite darf lesen) oder eine kommagetrennte Liste exakter Origins |
+
+Der eigentliche Zugriffsschutz bleibt in jedem Fall der `X-API-Key` — CORS entscheidet
+nur, ob JavaScript auf einer fremden Seite die Antwort lesen darf, nicht, ob die Anfrage
+überhaupt beantwortet wird. Ohne gesetzte Variable bleibt CORS wie bisher deaktiviert.
+
 ## 5. Withings-Anwendung erstellen
 
 1. Den [Withings Partner Hub](https://developer.withings.com/) öffnen und für die kostenlose Public API eine Anwendung erstellen.

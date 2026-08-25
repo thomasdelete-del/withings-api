@@ -18,6 +18,7 @@ from fastapi import (
     Query,
     UploadFile,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -135,6 +136,24 @@ def create_app(custom_settings: Settings | None = None) -> FastAPI:
         version=__version__,
         lifespan=lifespan,
     )
+
+    # Nur aktiv, wenn CORS_ALLOW_ORIGINS gesetzt ist (z.B. "*" oder eine
+    # kommagetrennte Liste erlaubter Origins) — z.B. nötig, damit ein lokal im
+    # Browser geöffnetes Dashboard (Origin "null" bei file://-Seiten, oder eine
+    # andere Domain) die API per fetch() direkt aufrufen darf. Ohne gesetzte
+    # Variable bleibt CORS wie bisher deaktiviert (kein Access-Control-Allow-
+    # Origin-Header, Browser-Anfragen von anderen Origins werden blockiert).
+    # Der eigentliche Zugriffsschutz bleibt in jedem Fall der X-API-Key: CORS
+    # entscheidet nur, ob JavaScript auf einer fremden Seite die Antwort lesen
+    # darf, nicht, ob die Anfrage überhaupt Daten zurückbekommt.
+    if settings.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_origins,
+            allow_methods=["GET", "POST"],
+            allow_headers=["X-API-Key", "Content-Type"],
+            allow_credentials=False,
+        )
 
     @app.middleware("http")
     async def security_headers(request, call_next):
