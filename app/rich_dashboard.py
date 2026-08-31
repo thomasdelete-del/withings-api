@@ -229,6 +229,8 @@ def rich_dashboard_html() -> str:
   footer a { color: inherit; }
 
   .hidden { display:none !important; }
+  .asof-input { background: var(--surface-2); border:1px solid var(--border); border-radius:6px; color: var(--text-primary); padding: 6px 8px; font-size: 13px; font-family:inherit; max-width:150px; }
+  .weather-status-bar.asof-banner .link-btn { padding:0 0 0 4px; }
   .login-gate { max-width: 420px; margin: 60px auto; text-align:center; }
   .login-gate h2 { font-size:17px; font-weight:650; margin: 0 0 6px; }
   .login-gate p.hint { font-size:12.5px; color: var(--text-muted); margin: 0 0 16px; line-height:1.5; }
@@ -280,6 +282,7 @@ def rich_dashboard_html() -> str:
   <div class="logout-row"><button class="link-btn" id="logoutBtn">Abmelden</button></div>
   <div class="weather-status-bar" id="withingsStatus"></div>
   <div class="weather-status-bar" id="weatherStatus"></div>
+  <div class="weather-status-bar info asof-banner" id="asOfBanner"></div>
 
   <div class="filter-row">
     <div class="filter-group">
@@ -309,6 +312,11 @@ def rich_dashboard_html() -> str:
         <button class="pill" data-eb="off">Aus</button>
       </div>
     </div>
+    <div class="filter-group">
+      <span class="filter-label">Analyse-Datum</span>
+      <input type="date" id="asOfInput" class="asof-input">
+      <button class="link-btn hidden" id="asOfReset" type="button">Zurück zu aktuell</button>
+    </div>
     <div class="spacer"></div>
   </div>
 
@@ -328,10 +336,11 @@ def rich_dashboard_html() -> str:
     <div class="card-head">
       <div>
         <h2 id="mainChartTitle">Gewichtsverlauf</h2>
-        <div class="card-sub">Wochenmittelwerte. Fehlerbalken zeigen ± 1 Standardabweichung der Tageswerte innerhalb der Woche.</div>
+        <div class="card-sub">Einzelmesspunkte, 15-Tage-Trend und natürliches Schwankungsband (± 1 Standardabweichung der Trend-Residuen). Der letzte Messwert ist hervorgehoben.</div>
       </div>
     </div>
     <div class="chart-box"><canvas id="mainChart"></canvas></div>
+    <div class="legend" id="mainLegend"></div>
     <div class="table-toggle-row"><button class="link-btn" id="mainTableToggle">Als Tabelle anzeigen</button></div>
     <div id="mainTableWrap" style="display:none;"></div>
   </div>
@@ -393,7 +402,7 @@ def rich_dashboard_html() -> str:
     <div class="card-head">
       <div>
         <h2>Geschätzte Kalorienbilanz</h2>
-        <div class="card-sub">Aus der wöchentlichen Gewichtsveränderung abgeleitet (1 kg ≈ 7700 kcal)</div>
+        <div class="card-sub">Physikalisches Modell: aus Fett- und Muskelmasseänderung abgeleitet (Fett ≈ 9400 kcal/kg, Muskel ≈ 1100 kcal/kg) — sonst vereinfacht aus der Gewichtsänderung (1 kg ≈ 7700 kcal)</div>
       </div>
     </div>
     <div class="chart-box"><canvas id="calorieChart"></canvas></div>
@@ -410,8 +419,12 @@ def rich_dashboard_html() -> str:
         <div class="label">Letzte 4 Wochen (Ø)</div>
         <div class="value" id="calorieStat4wk">–</div>
       </div>
+      <div class="stat-tile mini">
+        <div class="label">Letzte 60 Tage (Ø)</div>
+        <div class="value" id="calorieStat60d">–</div>
+      </div>
     </div>
-    <p class="note">Rot = geschätzter Kalorienüberschuss, Blau = geschätztes Kaloriendefizit gegenüber dem eigenen Verbrauch &mdash; berechnet allein aus der Gewichtsänderung, nicht aus tatsächlich geloggtem Essen. Das ist eine Bilanz (Über-/Unterschuss), keine gemessene Kalorienaufnahme; Wassereinlagerungen, Verdauung und Messungenauigkeit verzerren das Ergebnis besonders über kurze Zeiträume.</p>
+    <p class="note">Rot = geschätzter Kalorienüberschuss, Blau = geschätztes Kaloriendefizit gegenüber dem eigenen Verbrauch &mdash; berechnet allein aus der Körperzusammensetzung, nicht aus tatsächlich geloggtem Essen. Wenn für den Vergleichszeitraum Fett- und Muskelmasse vorliegen (Withings-Bioimpedanz), wird gewebespezifisch gerechnet: Fettmasseänderung × 9400 kcal/kg + Muskelmasseänderung × 1100 kcal/kg, Wasser- und Knochenmasseänderungen zählen mit 0 kcal/kg, da sie physikalisch keinen Brennwert haben. Blasse Balken markieren Wochen, für die das nicht möglich war &mdash; dort wird auf die alte, vereinfachte Faustregel (Gewichtsänderung × 7700 kcal/kg) zurückgegriffen, die implizit unterstellt, jede Gewichtsänderung sei reines Fettgewebe. Das bleibt in jedem Fall eine Bilanz (Über-/Unterschuss), keine gemessene Kalorienaufnahme; Messungenauigkeit der Bioimpedanz sowie kurzfristige Wassereinlagerungen in Fett-/Muskelwert verzerren das Ergebnis weiterhin, besonders über sehr kurze Zeiträume.</p>
   </div>
 
   <div class="card">
@@ -467,7 +480,7 @@ themeToggle.addEventListener('click', (e) => {
 });
 
 // ---------- state ----------
-let state = { range: '365', metric: 'weight', errorBars: true };
+let state = { range: '365', metric: 'weight', errorBars: true, asOf: null };
 
 const rangeGroup = document.getElementById('rangeGroup');
 rangeGroup.addEventListener('click', e => {
@@ -493,6 +506,17 @@ errorBarGroup.addEventListener('click', e => {
   state.errorBars = btn.dataset.eb === 'on';
   rerenderAll();
 });
+
+// ---------- Analyse-Datum: statische Steuerelemente (Datumsfeld + Reset-Link in der
+// Filter-Zeile). Der Reset-Link im Banner selbst wird bei jedem syncAsOfUI()-Aufruf neu
+// erzeugt (innerHTML) und bekommt dort seinen eigenen Listener, damit hier keine
+// Listener auf einem dauerhaften DOM-Knoten mehrfach angehäuft werden.
+const asOfInput = document.getElementById('asOfInput');
+if(asOfInput){
+  asOfInput.addEventListener('change', () => { if(asOfInput.value) setAsOf(asOfInput.value); });
+}
+const asOfResetBtn = document.getElementById('asOfReset');
+if(asOfResetBtn) asOfResetBtn.addEventListener('click', clearAsOf);
 
 // ---------- error bar plugin (thin whiskers showing per-day min/max spread) ----------
 const errorBarPlugin = {
@@ -529,8 +553,82 @@ const errorBarPlugin = {
 };
 Chart.register(errorBarPlugin);
 
+// ---------- Analyse-Datum-Markierung im Hauptchart ----------
+// Zeichnet eine rot gestrichelte Vertikale beim gewählten Analyse-Datum (state.asOf) —
+// NUR auf mainChart (global registrierte Plugins feuern sonst auf jedem Chart.js-Chart,
+// daher der explizite canvas-id-Guard, analog zum bestehenden errorBarPlugin-Muster).
+const asOfMarkerPlugin = {
+  id: 'asOfMarker',
+  afterDatasetsDraw(chart){
+    if(chart.canvas.id !== 'mainChart') return;
+    if(!state.asOf) return;
+    const xScale = chart.scales.x;
+    if(!xScale) return;
+    const x = xScale.getPixelForValue(parseISO(state.asOf).getTime());
+    if(x < chart.chartArea.left || x > chart.chartArea.right) return;
+    const { ctx, chartArea } = chart;
+    ctx.save();
+    ctx.strokeStyle = '#e34948';
+    ctx.setLineDash([5,4]);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x, chartArea.top);
+    ctx.lineTo(x, chartArea.bottom);
+    ctx.stroke();
+    ctx.restore();
+  }
+};
+Chart.register(asOfMarkerPlugin);
+
+// ---------- letzter Messwert: farbige Markierung + Beschriftung im Hauptchart ----------
+// Analog zum bereits etablierten Ad-hoc-Trendchart (Session 9): der zuletzt gemessene
+// Rohwert wird direkt im Chart hervorgehoben (Punkt + Wert/Datum-Label), unabhängig davon,
+// ob er ein Ausreißer ist — reine visuelle Orientierungshilfe "wo steht der neueste Wert".
+// Konfiguration wird pro Render über chart.options.plugins.lastPointHighlight gesetzt
+// (Punkt-Koordinate + fertig formatierte Label-Texte), NUR auf mainChart aktiv (gleicher
+// canvas-id-Guard wie bei asOfMarkerPlugin/errorBarPlugin, da global registrierte Plugins
+// sonst auf jedem Chart.js-Chart im Dashboard feuern würden).
+const lastPointPlugin = {
+  id: 'lastPointHighlight',
+  afterDatasetsDraw(chart){
+    if(chart.canvas.id !== 'mainChart') return;
+    const cfg = chart.options.plugins && chart.options.plugins.lastPointHighlight;
+    if(!cfg || !cfg.point) return;
+    const xScale = chart.scales.x, yScale = chart.scales.y;
+    if(!xScale || !yScale) return;
+    const px = xScale.getPixelForValue(cfg.point.x);
+    const py = yScale.getPixelForValue(cfg.point.y);
+    if(px < chart.chartArea.left || px > chart.chartArea.right) return;
+    const { ctx } = chart;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(px, py, 5, 0, Math.PI*2);
+    ctx.fillStyle = cfg.color;
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = cfg.surfaceColor;
+    ctx.stroke();
+    ctx.font = "bold 12px system-ui, -apple-system, 'Segoe UI', sans-serif";
+    ctx.fillStyle = cfg.textColor;
+    ctx.textBaseline = 'alphabetic';
+    const labelW = Math.max(ctx.measureText(cfg.label1).width, ctx.measureText(cfg.label2).width);
+    const tx = Math.min(px + 12, chart.chartArea.right - labelW - 4);
+    ctx.fillText(cfg.label1, tx, py - 6);
+    ctx.fillText(cfg.label2, tx, py + 8);
+    ctx.restore();
+  }
+};
+Chart.register(lastPointPlugin);
+
 // ---------- helpers ----------
 function parseISO(d){ const [y,m,dd] = d.split('-').map(Number); return new Date(y, m-1, dd); }
+// Formatiert einen lokalen Timestamp als YYYY-MM-DD OHNE über UTC zu gehen (bewusst kein
+// toISOString()) — parseISO() konstruiert lokale Date-Objekte; ein Roundtrip über
+// toISOString() würde je nach Browser-Zeitzone zu einem Off-by-one-Tag-Fehler führen.
+function fmtISODateLocal(d){
+  const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
 function daysBetween(a,b){ return Math.round((b-a)/86400000); }
 function fmtDateShort(d){ return d.toLocaleDateString('de-DE', {day:'2-digit', month:'2-digit', year:'2-digit'}); }
 function fmtDateLong(d){ return d.toLocaleDateString('de-DE', {day:'2-digit', month:'short', year:'numeric'}); }
@@ -548,6 +646,81 @@ function filteredByRange(range){
   const last = parseISO(DAILY[DAILY.length-1].date);
   const cutoff = new Date(last); cutoff.setDate(cutoff.getDate()-days);
   return DAILY.filter(d => parseISO(d.date) >= cutoff);
+}
+
+// ---------- Analyse-Datum (state.asOf) ----------
+// Erlaubt, die "Aktueller Stand"-Elemente (Stat-Kacheln, Erkenntnisse) rückwirkend auf
+// ein beliebiges historisches Datum in der Vergangenheit zu beziehen, statt immer den
+// letzten Messtag zu zeigen — gesetzt per Klick auf die Hauptkurve oder über das
+// Datumsfeld in der Filter-Zeile. Die Diagramme selbst bleiben bewusst unverändert und
+// zeigen weiterhin die komplette Historie (siehe asOfMarkerPlugin oben): sie sind die
+// Stelle, an der geklickt wird, und mehrere Charts (Jahresvergleich, saisonaler Verlauf)
+// brauchen ohnehin mehrjährige Daten.
+function latestDate(){ return DAILY.length ? DAILY[DAILY.length-1].date : null; }
+function refDate(){ return state.asOf || latestDate(); }
+function isHistoricalAsOf(){ return state.asOf != null && state.asOf !== latestDate(); }
+function dailyAsOf(){
+  const ref = refDate();
+  return ref ? DAILY.filter(d => d.date <= ref) : DAILY.slice();
+}
+function filteredByRangeAsOf(range){
+  const ref = refDate();
+  if(!ref) return filteredByRange(range);
+  if(range === 'all') return dailyAsOf().filter(d => d.date >= ALL_RANGE_START);
+  const days = parseInt(range,10);
+  const cutoff = new Date(parseISO(ref)); cutoff.setDate(cutoff.getDate()-days);
+  return dailyAsOf().filter(d => parseISO(d.date) >= cutoff);
+}
+// Synchronisiert Datumsfeld, Reset-Button-Sichtbarkeit und den Hinweis-Banner mit
+// state.asOf. Der Reset-Link im Banner wird hier bei jedem Aufruf neu erzeugt
+// (innerHTML) und bekommt dabei einen frischen Listener — unproblematisch, da der alte
+// DOM-Knoten samt Listener mit ihm verworfen wird, kein Anhäufen wie beim statischen
+// #asOfReset-Button (der seinen Listener nur einmal, siehe oben, bekommt).
+function syncAsOfUI(){
+  const input = document.getElementById('asOfInput');
+  const banner = document.getElementById('asOfBanner');
+  const resetBtn = document.getElementById('asOfReset');
+  const historical = isHistoricalAsOf();
+  if(input) input.value = refDate() || '';
+  if(resetBtn) resetBtn.classList.toggle('hidden', !historical);
+  if(banner){
+    banner.classList.toggle('visible', historical);
+    if(historical){
+      banner.innerHTML = `Analyse bezieht sich auf den Stand vom <strong>${fmtDateShort(parseISO(state.asOf))}</strong> — spätere Messwerte werden für Kacheln &amp; Erkenntnisse ausgeblendet. <button class="link-btn" type="button" id="asOfBannerReset">Zurück zu aktuell</button>`;
+      const bannerBtn = document.getElementById('asOfBannerReset');
+      if(bannerBtn) bannerBtn.addEventListener('click', clearAsOf);
+    } else {
+      banner.innerHTML = '';
+    }
+  }
+}
+function setAsOf(dateStr){
+  state.asOf = (dateStr && dateStr !== latestDate()) ? dateStr : null;
+  syncAsOfUI();
+  rerenderAll();
+}
+function clearAsOf(){
+  state.asOf = null;
+  syncAsOfUI();
+  rerenderAll();
+}
+
+// Mittelwert über ein zentriertes ±3-Tage-Fenster (7 Tage) um centerTs, sofern das volle
+// Fenster nicht in die Zukunft reicht (centerTs+3d <= boundaryTs); sonst — Randfall, z.B.
+// "heute" — über das rückblickende [centerTs-3d, centerTs]-Fenster (4 Tage). boundaryTs
+// ist bewusst ein eigener Parameter (nicht implizit centerTs selbst) — dadurch deckt
+// dieselbe Funktion sowohl den "heute"-Randfall (centerTs === boundaryTs) als auch einen
+// vollen zentrierten Vergleich zu einem historischen Datum ab (centerTs < boundaryTs).
+// Nimmt bewusst Millisekunden-Timestamps (nicht Datums-Strings) entgegen, um eine
+// .toISOString()-Rückkonvertierung zu vermeiden (siehe fmtISODateLocal oben).
+function centeredWindowAvg(points, key, centerTs, boundaryTs){
+  const DAY = 86400000;
+  const hasFullFuture = centerTs + 3*DAY <= boundaryTs;
+  const lo = centerTs - 3*DAY;
+  const hi = hasFullFuture ? centerTs + 3*DAY : centerTs;
+  const vals = points.filter(p => p[key] != null && parseISO(p.date).getTime() >= lo && parseISO(p.date).getTime() <= hi).map(p => p[key]);
+  if(!vals.length) return null;
+  return { mean: vals.reduce((a,b)=>a+b,0) / vals.length, n: vals.length, days: hasFullFuture ? 7 : 4 };
 }
 
 // Group daily values into Monday-start calendar weeks; return one {x, y, yMin, yMax, n, std} per week.
@@ -594,57 +767,48 @@ function weeklyTooltip(context, unit){
 }
 
 // ---------- stat tiles ----------
+// Beziehen sich per Klick auf die Hauptkurve oder das "Analyse-Datum"-Feld optional auf
+// ein historisches Datum statt auf den letzten Messtag ("Stand" statt "Aktuell") — siehe
+// state.asOf/refDate() oben. Die "Veränderung"-Kacheln und die Kalorienbilanz (4 Wochen)
+// nutzen dafür ein zentriertes ±3-Tage-Fenster (centeredWindowAvg) statt eines
+// Kalenderwochen-Mittels: Randfall "jetzt"/gewähltes Datum = rückblickendes 4-Tage-
+// Fenster (volles zentriertes Fenster reicht in die Zukunft), Vergleichszeitpunkte in der
+// Vergangenheit = volles zentriertes 7-Tage-Fenster.
 function renderStats(){
   const metric = state.metric;
   const unit = METRIC_UNITS[metric];
-  const all = DAILY.filter(d => d[metric] != null);
+  const refTs = parseISO(refDate()).getTime();
+  const all = dailyAsOf().filter(d => d[metric] != null);
   if(!all.length){ document.getElementById('statGrid').innerHTML = ''; return; }
 
-  // Wochenmittel statt einzelner Tageswerte — konsistent mit der übrigen
-  // Wochenaggregation im Dashboard (weniger Ausreißerrauschen durch Mehrfachmessungen
-  // oder einzelne ungewöhnliche Tage).
-  const weeks = weeklyAgg(all, metric);
-  if(!weeks.length){ document.getElementById('statGrid').innerHTML = ''; return; }
-  const lastWeek = weeks[weeks.length - 1];
-
-  // Letzte 7 Tage (rollierendes Fenster bis zum letzten Messtag) statt Kalenderwoche —
-  // gleiche Fenster-Logik wie bei computeCalorieBalanceLastNDays weiter unten.
-  const lastTs = parseISO(all[all.length - 1].date).getTime();
-  const last7Start = new Date(lastTs - 6 * 86400000);
-  const last7End = new Date(lastTs);
-  const last7Vals = all.filter(d => parseISO(d.date).getTime() >= lastTs - 6 * 86400000).map(d => d[metric]);
-  const lastVal = last7Vals.reduce((a,b)=>a+b,0) / last7Vals.length;
-
-  function weekNearDaysAgo(days){
-    const targetTs = lastWeek.x - days * 86400000;
-    let best = null, bestDiff = Infinity;
-    for(const w of weeks){
-      const diff = Math.abs(w.x - targetTs);
-      if(diff < bestDiff){ bestDiff = diff; best = w; }
-    }
-    return (best && bestDiff <= 10 * 86400000) ? best : null;
-  }
-  const w30 = weekNearDaysAgo(30);
-  const w60 = weekNearDaysAgo(60);
-  const w365 = weekNearDaysAgo(365);
-
-  function deltaHtml(prevWeek, cur){
-    if(prevWeek == null || cur == null) return '<div class="delta flat">–</div>';
-    const diff = cur - prevWeek.y;
-    const cls = Math.abs(diff) < 0.05 ? 'flat' : (diff > 0 ? 'up' : 'down');
-    const sign = diff > 0 ? '+' : '';
-    return `<div class="delta ${cls}">${sign}${fmtNum(diff)} ${unit}</div>`;
-  }
-
+  const historical = isHistoricalAsOf();
   const lastDayRec = all[all.length - 1];
   const lastDayVal = lastDayRec[metric];
 
+  // Letzte 7 Tage (Ø): rollierendes Fenster bis zum Referenzdatum (state.asOf oder der
+  // letzte Messtag) — Formel unverändert, jetzt relativ zu refTs statt zwingend zum
+  // tatsächlich letzten Messtag.
+  const last7Start = new Date(refTs - 6 * 86400000);
+  const last7End = new Date(refTs);
+  const last7Vals = all.filter(d => { const t = parseISO(d.date).getTime(); return t >= refTs - 6*86400000 && t <= refTs; }).map(d => d[metric]);
+  const lastVal = last7Vals.length ? last7Vals.reduce((a,b)=>a+b,0) / last7Vals.length : null;
+
+  const nowWindow = centeredWindowAvg(all, metric, refTs, refTs);
+  function changeTile(label, days){
+    const past = centeredWindowAvg(all, metric, refTs - days*86400000, refTs);
+    if(!nowWindow || !past) return { label, value: '–', delta: '<div class="delta flat">–</div>' };
+    const diff = nowWindow.mean - past.mean;
+    const cls = Math.abs(diff) < 0.05 ? 'flat' : (diff > 0 ? 'up' : 'down');
+    const sign = diff > 0 ? '+' : '';
+    return { label, value: `${sign}${fmtNum(diff)} ${unit}`, delta: `<div class="delta ${cls}">${sign}${fmtNum(diff)} ${unit}</div>` };
+  }
+
   const tiles = [
-    { label: `Aktuell (${METRIC_LABELS[metric]})`, value: `${fmtNum(lastDayVal)} ${unit}`, delta: `<div class="delta flat">Letzte Messung ${fmtDateShort(parseISO(lastDayRec.date))}</div>` },
-    { label: 'Letzte 7 Tage (Ø)', value: `${fmtNum(lastVal)} ${unit}`, delta: `<div class="delta flat">${fmtDateShort(last7Start)} – ${fmtDateShort(last7End)}</div>` },
-    { label: 'Veränderung 30 Tage', value: w30!=null ? `${fmtNum(lastVal-w30.y)} ${unit}` : '–', delta: deltaHtml(w30, lastVal) },
-    { label: 'Veränderung 60 Tage', value: w60!=null ? `${fmtNum(lastVal-w60.y)} ${unit}` : '–', delta: deltaHtml(w60, lastVal) },
-    { label: 'Veränderung 1 Jahr', value: w365!=null ? `${fmtNum(lastVal-w365.y)} ${unit}` : '–', delta: deltaHtml(w365, lastVal) },
+    { label: `${historical ? 'Stand' : 'Aktuell'} (${METRIC_LABELS[metric]})`, value: `${fmtNum(lastDayVal)} ${unit}`, delta: `<div class="delta flat">${historical ? 'Messung vom' : 'Letzte Messung'} ${fmtDateShort(parseISO(lastDayRec.date))}</div>` },
+    { label: 'Letzte 7 Tage (Ø)', value: lastVal!=null ? `${fmtNum(lastVal)} ${unit}` : '–', delta: `<div class="delta flat">${fmtDateShort(last7Start)} – ${fmtDateShort(last7End)}</div>` },
+    changeTile('Veränderung 30 Tage', 30),
+    changeTile('Veränderung 60 Tage', 60),
+    changeTile('Veränderung 1 Jahr', 365),
   ];
 
   // Kalorienbilanz-Kacheln: immer auf Gewicht bezogen (unabhängig von der oben gewählten
@@ -658,37 +822,60 @@ function renderStats(){
     const calSign = avgKcal > 0 ? '+' : '';
     return `<span class="${calCls}">${calSign}${fmtNum(avgKcal,0)} kcal/Tag</span>`;
   }
-  const weightPoints = DAILY.filter(d => d.weight != null);
+  // Kleines Modus-Suffix für die Kalorienbilanz-Kacheln: zeigt an, ob gewebespezifisch
+  // (Fett-/Muskelmasse, physikalisches Modell) oder auf die alte, vereinfachte
+  // Gewichts-Faustregel zurückgefallen wurde (siehe kcalPerDayFromDeltas oben).
+  function calorieModeSuffix(mode){
+    return mode === 'composition' ? ' · aus Fett-/Muskelmasse' : ' · vereinfacht (nur Gewicht)';
+  }
+  const allAsOf = dailyAsOf();
 
-  // Letzte 7 Tage (Ø) — gleiche Logik/Formel wie die 4-Wochen-Kachel unten, nur über ein
-  // rollierendes 7-Tage-Fenster statt Kalenderwochen (siehe computeCalorieBalanceLastNDays).
-  const r7 = computeCalorieBalanceLastNDays(weightPoints, 7);
+  // Letzte 7 Tage (Ø) — unverändert in der Fensterlogik (rollierendes 7-Tage-Rohtage-
+  // Fenster, kein Kalenderwochen-Mittel), asOf-bewusst über allAsOf; jetzt gewebespezifisch
+  // wenn möglich (siehe computeCalorieBalanceLastNDays).
+  const r7 = computeCalorieBalanceLastNDays(allAsOf, 7);
   if(r7){
     tiles.push({
       label: 'Kalorienbilanz (7 Tage)',
       value: calorieTileHtml(r7.y),
-      delta: `<div class="delta flat">Ø letzte 7 Tage</div>`,
+      delta: `<div class="delta flat">Ø letzte 7 Tage${calorieModeSuffix(r7.mode)}</div>`,
     });
   }
 
-  const calRows = computeCalorieBalance(weightPoints);
-  if(calRows.length){
-    const recent = calRows.slice(-4);
-    const avgKcal = recent.reduce((a,r) => a + r.y, 0) / recent.length;
+  // Kalorienbilanz (4 Wochen): zentriertes ±3-Tage-Fenster (heute-Fenster vs. vor-28-
+  // Tagen-Fenster) statt eines Mittels über vier Kalenderwochen-Deltas — macht diese
+  // Kachel konsistent mit der gleichnamigen Mini-Kachel der Kalorienbilanz-Karte unten
+  // und dem entsprechenden Erkenntnisse-Satz (dieselbe Formel, dieselbe Zahl). Nutzt
+  // estimateKcalPerDayPhysical (gewebespezifisch, Fallback auf Gewicht).
+  const est4wk = estimateKcalPerDayPhysical(allAsOf, refTs, 28);
+  if(est4wk){
     tiles.push({
       label: 'Kalorienbilanz (4 Wochen)',
-      value: calorieTileHtml(avgKcal),
-      delta: `<div class="delta flat">Ø letzte ${recent.length} Wochen</div>`,
+      value: calorieTileHtml(est4wk.kcalPerDay),
+      delta: `<div class="delta flat">Heute vs. vor 28 Tagen${calorieModeSuffix(est4wk.mode)}</div>`,
     });
   }
 
-  // Zyklustag-Kachel: an welchem Tag des per Frequenzanalyse (Lomb-Scargle-Periodogramm,
-  // siehe computeWeightFrequency) gefundenen Schwankungszyklus steht der aktuellste
-  // Messwert, und steigt oder fällt der Zyklus dort gerade (Pfeil)? Immer auf Gewicht
-  // bezogen, unabhängig von der oben gewählten Kennzahl und vom Zeitraum-Filter (die
-  // Frequenzanalyse braucht ein festes, ausreichend dichtes Fenster). Nur sichtbar, wenn
-  // eine statistisch auffällige Periodizität gefunden wurde (Fehlalarm-Wahrscheinlichkeit
-  // < 5%) — sonst würde die Kachel eine Regelmäßigkeit suggerieren, die es nicht gibt.
+  // Kalorienbilanz (60 Tage): gleiches Prinzip wie oben, nur mit 60-Tage-Fenster — analog
+  // zur bereits bestehenden "Veränderung 60 Tage"-Kachel für die gewählte Kennzahl, jetzt
+  // auch als Kalorienbilanz-Pendant. Konsistent mit der gleichnamigen Mini-Kachel der
+  // Kalorienbilanz-Karte unten (dieselbe Formel, dieselbe Zahl).
+  const est60d = estimateKcalPerDayPhysical(allAsOf, refTs, 60);
+  if(est60d){
+    tiles.push({
+      label: 'Kalorienbilanz (60 Tage)',
+      value: calorieTileHtml(est60d.kcalPerDay),
+      delta: `<div class="delta flat">Heute vs. vor 60 Tagen${calorieModeSuffix(est60d.mode)}</div>`,
+    });
+  }
+
+  // Zyklustag-Kachel: an welchem Tag des per Frequenzanalyse (Lomb-Scargle-Periodogramm +
+  // Block-Bootstrap-Signifikanztest, siehe computeWeightFrequency) gefundenen
+  // Schwankungszyklus steht der Referenzwert, und steigt oder fällt der Zyklus dort
+  // gerade (Pfeil)? Immer auf Gewicht bezogen, unabhängig von der oben gewählten
+  // Kennzahl. computeWeightFrequency() ist selbst asOf-bewusst (nutzt dailyAsOf()),
+  // daher hier keine zusätzliche Filterung nötig. Nur sichtbar, wenn eine statistisch
+  // auffällige Periodizität gefunden wurde (Block-Bootstrap-p-Wert < 5%).
   const freq = computeWeightFrequency();
   const cycleInfo = computeCycleDayInfo(freq);
   if(cycleInfo){
@@ -711,7 +898,11 @@ function renderStats(){
 
 // ---------- insights & recommendations (derived, not fetched) ----------
 function renderInsights(){
-  const points = filteredByRange(state.range);
+  // Zeitraum- UND Analyse-Datum-gefiltert: alle Insights unten, die "points" nutzen,
+  // gehören zur "Aktueller Stand"-Klasse und reisen mit einem gewählten state.asOf mit
+  // (siehe filteredByRangeAsOf() oben). Ausnahmen (komplette Historie, unabhängig von
+  // Zeitraum UND Analyse-Datum) sind einzeln unten dokumentiert.
+  const points = filteredByRangeAsOf(state.range);
   const el = document.getElementById('insightList');
   if(points.length < 3){
     el.innerHTML = '<div class="insight-empty">Zu wenige Daten im gewählten Zeitraum für Erkenntnisse.</div>';
@@ -722,13 +913,51 @@ function renderInsights(){
 
   // Weight trend — recent weeks only, so this doesn't wash out into a misleading
   // full-range average when a long Zeitraum is selected (see weeklySlopePerMonth).
+  // Nutzt jetzt einen echten Regressions-t-Test (linRegWithP) statt eines festen
+  // |Steigung|<0,2-Schwellenwerts: ein Audit über alle historisch möglichen gleitenden
+  // 8-Wochen-Fenster zeigte, dass der feste Schwellenwert in ~24% der Fälle einen
+  // "Trend" gemeldet hätte, der statistisch nicht von Rauschen zu unterscheiden war.
   const wTrend = weeklySlopePerMonth(points, 'weight');
   if(wTrend.slope != null){
-    if(Math.abs(wTrend.slope) < 0.2){
-      addRow('neutral', `Das Gewicht ist in den letzten ${wTrend.n} Wochen mit Daten <strong>weitgehend stabil</strong> (${fmtNum(wTrend.slope)} kg/Monat).`);
+    if(wTrend.p == null || wTrend.p >= TREND_P_THRESHOLD){
+      const pTxt = wTrend.p != null ? `, p = ${fmtNum(wTrend.p,3)}` : '';
+      addRow('neutral', `<strong>Kein statistisch gesicherter Trend</strong> in den letzten ${wTrend.n} Wochen mit Daten (Punktschätzung ${fmtNum(wTrend.slope)} kg/Monat liegt im Rahmen der natürlichen Schwankung${pTxt}).`);
     } else {
       const dir = wTrend.slope < 0 ? 'sinkt' : 'steigt';
-      addRow('neutral', `Das Gewicht <strong>${dir}</strong> in den letzten ${wTrend.n} Wochen mit Daten um rund <strong>${fmtNum(Math.abs(wTrend.slope))} kg/Monat</strong>.`);
+      const pTxt = wTrend.p < 0.001 ? 'p < 0,001' : `p = ${fmtNum(wTrend.p,3)}`;
+      addRow('neutral', `Das Gewicht <strong>${dir}</strong> in den letzten ${wTrend.n} Wochen mit Daten statistisch gesichert um rund <strong>${fmtNum(Math.abs(wTrend.slope))} kg/Monat</strong> (${pTxt}).`);
+    }
+  }
+
+  // Trend-Robustheitscheck über mehrere Fensterlängen (Session 9, 30.08.2026): prüft,
+  // ob sich dieselbe Richtung wie oben (8-Wochen-Fenster) auch bei unabhängig gewählten
+  // längeren/kürzeren Fensterlängen zeigt — ein Trend, der nur bei einer bestimmten
+  // Fensterwahl signifikant wird, ist ein deutlich schwächerer Befund als einer, der über
+  // mehrere Fensterlängen hinweg übereinstimmt (siehe Statusdokument, Ad-hoc-Analyse vom
+  // 30.08.2026). Nutzt bewusst die komplette asOf-gefilterte Historie (dailyAsOf()) statt
+  // der Zeitraum-Pille "points" oben — die Robustheitsfrage ist unabhängig davon, welchen
+  // Ausschnitt der Nutzer sich gerade ansieht (analog zu computeWeightFrequency()).
+  if(wTrend.slope != null && wTrend.n >= 3){
+    const TREND_ROBUST_WEEKS = [6, 12, 26];
+    const robustBasis = dailyAsOf().filter(d => d.weight != null);
+    const robustChecks = TREND_ROBUST_WEEKS
+      .map(w => ({ weeks: w, ...weeklySlopePerMonth(robustBasis, 'weight', w) }))
+      .filter(c => c.slope != null && c.p != null);
+    if(robustChecks.length >= 2){
+      const primarySig = wTrend.p != null && wTrend.p < TREND_P_THRESHOLD;
+      const primaryDir = wTrend.slope < 0 ? -1 : 1;
+      const agreeing = robustChecks.filter(c => c.p < TREND_P_THRESHOLD && Math.sign(c.slope) === primaryDir);
+      const windowsTxt = robustChecks.map(c=>c.weeks).join('/') + ' Wochen';
+      const needForRobust = robustChecks.length > 2 ? robustChecks.length - 1 : robustChecks.length;
+      if(primarySig && agreeing.length >= needForRobust){
+        addRow('good', `<strong>Robust:</strong> dieselbe Richtung bestätigt sich bei ${agreeing.length} von ${robustChecks.length} zusätzlich getesteten Fensterlängen (${windowsTxt}) ebenfalls statistisch signifikant — kein Artefakt der 8-Wochen-Fensterwahl.`);
+      } else if(primarySig && agreeing.length >= 1){
+        addRow('neutral', `Robustheitscheck: die Richtung bestätigt sich signifikant bei ${agreeing.length} von ${robustChecks.length} zusätzlich getesteten Fensterlängen (${windowsTxt}) — teilweise robust, nicht bei jeder Fensterwahl gleich stark ausgeprägt.`);
+      } else if(primarySig){
+        addRow('warning', `Robustheitscheck: bei keiner der zusätzlich getesteten Fensterlängen (${windowsTxt}) zeigt sich derselbe signifikante Trend — der 8-Wochen-Befund oben sollte mit Vorsicht interpretiert werden.`);
+      } else if(agreeing.length >= 2){
+        addRow('neutral', `Robustheitscheck: obwohl die letzten ${wTrend.n} Wochen für sich genommen keinen signifikanten Trend zeigen, ist bei ${agreeing.length} von ${robustChecks.length} längeren/kürzeren Fensterlängen (${windowsTxt}) ein Trend in dieselbe Richtung signifikant — möglicherweise hat sich die kurzfristige Entwicklung gerade abgeflacht.`);
+      }
     }
   }
 
@@ -759,13 +988,21 @@ function renderInsights(){
     }
   }
 
-  // Estimated calorie balance (recent weeks)
-  const calRows = computeCalorieBalance(points);
-  if(calRows.length){
-    const recent = calRows.slice(-4);
-    const avg = recent.reduce((a,r)=>a+r.y,0) / recent.length;
-    const label = avg >= 0 ? 'geschätzter Überschuss' : 'geschätztes Defizit';
-    addRow('neutral', `Über die letzten ${recent.length} Wochen im Schnitt ein <strong>${label} von ${fmtNum(Math.abs(avg),0)} kcal/Tag</strong> (aus der Gewichtsveränderung abgeleitet, siehe Kalorienbilanz unten).`);
+  // Estimated calorie balance (recent 4 weeks) — jetzt über dasselbe zentrierte
+  // ±3-Tage-Fenster wie die "Kalorienbilanz (4 Wochen)"-Kachel im Statistik-Raster
+  // (heute-Fenster vs. vor-28-Tagen-Fenster) statt eines Mittels über vier
+  // Kalenderwochen-Deltas — beide Stellen zeigen dadurch bewusst dieselbe Zahl.
+  {
+    const refTsIns = parseISO(refDate()).getTime();
+    const est4wkIns = estimateKcalPerDayPhysical(points, refTsIns, 28);
+    if(est4wkIns){
+      const kcalPerDay = est4wkIns.kcalPerDay;
+      const label = kcalPerDay >= 0 ? 'geschätzter Überschuss' : 'geschätztes Defizit';
+      const basis = est4wkIns.mode === 'composition'
+        ? `aus Fett- (${est4wkIns.deltaFat>=0?'+':''}${fmtNum(est4wkIns.deltaFat)} kg × ${FAT_KCAL_PER_KG} kcal/kg) und Muskelmasseänderung (${est4wkIns.deltaMuscle>=0?'+':''}${fmtNum(est4wkIns.deltaMuscle)} kg × ${LEAN_KCAL_PER_KG} kcal/kg) abgeleitet, physikalisches Modell`
+        : `aus der Gewichtsveränderung abgeleitet (vereinfacht, Körperzusammensetzung für diesen Zeitraum unvollständig)`;
+      addRow('neutral', `In den letzten 4 Wochen im Schnitt ein <strong>${label} von ${fmtNum(Math.abs(kcalPerDay),0)} kcal/Tag</strong> (${basis}, siehe Kalorienbilanz unten).`);
+    }
   }
 
   // Natural day-to-day weight fluctuation — average of the per-week std (already computed
@@ -773,12 +1010,60 @@ function renderInsights(){
   // selected Zeitraum. Gives context for how noisy the short-term calorie-balance estimates
   // above are: water retention, digestion, and time-of-day easily produce swings of this
   // size, so a single week's balance figure should be read with that in mind.
+  // Natürliche Gewichtsschwankung: Std der 15-Tage-Trend-Residuen (detrendDaily, wie bei
+  // der Frequenzanalyse) statt eines Mittels der Kalenderwochen-Std — vermeidet die
+  // willkürliche Montag-Sonntag-Wochengrenze und zählt einen echten, innerhalb einer
+  // Kalenderwoche laufenden Trend nicht versehentlich als "Rauschen" mit. Ein
+  // Methoden-Cross-Check (Kalenderwochen-Std, Trend-Residuen-Std, RMSSD, MAD-robuste Std)
+  // ergab eng beieinanderliegende Werte (0,36–0,40 kg) — der Trend-Residuen-Ansatz ist
+  // methodisch der sauberste der vier.
   {
-    const weightWeeksVar = weeklyAgg(points.filter(d => d.weight != null), 'weight').filter(w => w.n >= 3);
-    if(weightWeeksVar.length){
-      const avgStd = weightWeeksVar.reduce((a,w) => a + w.std, 0) / weightWeeksVar.length;
-      if(avgStd > 0){
-        addRow('neutral', `Das Gewicht schwankt auch ohne echte Veränderung natürlicherweise um durchschnittlich <strong>± ${fmtNum(avgStd)} kg</strong> innerhalb einer Woche (Wasserhaushalt, Verdauung, Tageszeit; Mittel über ${weightWeeksVar.length} Wochen mit ≥3 Messungen im gewählten Zeitraum) &mdash; Kalorienbilanz-Schätzungen über wenige Tage sollten daher mit Vorsicht interpretiert werden.`);
+    const weightPointsFluct = points.filter(d => d.weight != null);
+    if(weightPointsFluct.length >= 10){
+      const det = detrendDaily(weightPointsFluct, 'weight', FREQ_TREND_WINDOW);
+      if(det && det.resid.length >= 10){
+        const n = det.resid.length;
+        const meanR = det.resid.reduce((a,b)=>a+b,0) / n;
+        const varR = det.resid.reduce((a,b)=>a+(b-meanR)*(b-meanR),0) / (n-1);
+        const stdR = Math.sqrt(varR);
+        if(stdR > 0){
+          addRow('neutral', `Das Gewicht schwankt auch ohne echte Veränderung natürlicherweise um durchschnittlich <strong>± ${fmtNum(stdR)} kg</strong> um den kurzfristigen Trend (Wasserhaushalt, Verdauung, Tageszeit; Streuung der 15-Tage-Trend-Residuen über ${n} Messtage im gewählten Zeitraum) &mdash; Kalorienbilanz-Schätzungen über wenige Tage sollten daher mit Vorsicht interpretiert werden.`);
+
+          // Einordnung des letzten Messwerts (Session 9, 30.08.2026): ein einzelner
+          // Messpunkt — insbesondere der jeweils letzte — ist ein schlechter Indikator für
+          // die tatsächliche Richtung, siehe die Gewichtstrend-Analyse vom 30.08.2026 im
+          // Statusdokument. WICHTIG: für den Trendwert AM letzten Punkt bewusst NICHT
+          // det.trendAtT[n-1] verwenden — detrendDaily() polstert den Rand (kein
+          // Nullpadding) mit dem jeweils letzten Wert selbst, dadurch zieht der berechnete
+          // Trend genau an dieser Stelle in Richtung des womöglich auffälligen letzten
+          // Messwerts und würde eine echte Abweichung künstlich verkleinern (empirisch
+          // geprüft: mit dem gepolsterten Trend ergab sich hier nur 1,0σ statt der
+          // tatsächlichen ~1,9σ gegenüber einem rein rückblickenden Fenster). Stattdessen
+          // ein reines Rückblick-Fenster über die letzten FREQ_TREND_WINDOW Tage VOR dem
+          // letzten Messwert (dieser selbst ausgenommen) — analog zum bereits etablierten
+          // Randfall-Muster bei centeredWindowAvg() ("Aktuell"-Kachel: Rohwert/Rückblick
+          // statt symmetrisches Fenster am Rand). stdR (natürliche Schwankung, oben) bleibt
+          // unverändert nutzbar, da sie über alle Punkte gemittelt ist, nicht nur den Rand.
+          const lastDateStr = det.dates[n-1];
+          const lastVal = det.y[n-1];
+          const lastTs = parseISO(lastDateStr).getTime();
+          const backWin = weightPointsFluct.filter(d => {
+            const t = parseISO(d.date).getTime();
+            return t < lastTs && t >= lastTs - FREQ_TREND_WINDOW*86400000;
+          });
+          if(backWin.length >= 3){
+            const backTrend = backWin.reduce((a,d)=>a+d.weight,0) / backWin.length;
+            const lastResid = lastVal - backTrend;
+            const lastZ = lastResid / stdR;
+            if(Math.abs(lastZ) >= 1.5){
+              const exceedFrac = det.resid.filter(r => Math.abs(r) >= Math.abs(lastResid)).length / n;
+              const oneInN = exceedFrac > 0 ? Math.round(1/exceedFrac) : null;
+              const oneInTxt = oneInN && oneInN > 1 ? ` (im gewählten Zeitraum etwa jede ${oneInN}. Messung)` : '';
+              const dirTxt = lastResid >= 0 ? 'über' : 'unter';
+              addRow('neutral', `Der zuletzt erfasste Wert (<strong>${fmtNum(lastVal)} kg</strong> am ${fmtDateShort(parseISO(lastDateStr))}) liegt mit ${fmtNum(Math.abs(lastZ),1)}σ auffällig weit ${dirTxt} dem Trend der letzten ${FREQ_TREND_WINDOW} Tage${oneInTxt} — im Rahmen der natürlichen Schwankung oben, aber ein einzelner Messwert sagt für sich genommen wenig über die tatsächliche Richtung aus (siehe Gewichtstrend oben).`);
+            }
+          }
+        }
       }
     }
   }
@@ -802,27 +1087,26 @@ function renderInsights(){
   // makes sense against a fixed ~365-day window, not a filtered slice. Complements the
   // short-term (4-week) figure above: a near-zero year balance despite a real recent
   // deficit/surplus usually means the weight curve moved and came back (see Jahresvergleich).
+  // Jahresvergleich: dailyAsOf() (asOf-bewusst) statt der kompletten DAILY, zentriertes
+  // ±3-Tage-Fenster statt "nächstgelegene Kalenderwoche mit ±10-Tage-Toleranz" — dadurch
+  // liegt der Vergleichszeitpunkt per Konstruktion immer exakt ~365 Tage zurück, die
+  // frühere days>180-Sicherung gegen eine versehentlich zu nah gewählte Vergleichswoche
+  // entfällt.
   {
-    const weightWeeksAll = weeklyAgg(DAILY.filter(d => d.weight != null), 'weight');
-    if(weightWeeksAll.length >= 2){
-      const lastW = weightWeeksAll[weightWeeksAll.length - 1];
-      const targetTs = lastW.x - 365 * 86400000;
-      let bestW = null, bestDiff = Infinity;
-      for(const w of weightWeeksAll){
-        const diff = Math.abs(w.x - targetTs);
-        if(diff < bestDiff){ bestDiff = diff; bestW = w; }
-      }
-      const days = bestW ? (lastW.x - bestW.x) / 86400000 : 0;
-      if(bestW && bestDiff <= 10 * 86400000 && days > 180){
-        const deltaKg = lastW.y - bestW.y;
-        const kcalPerDay = (deltaKg * KCAL_PER_KG) / days;
-        const sign = kcalPerDay >= 0 ? '+' : '';
-        if(Math.abs(kcalPerDay) < 50){
-          addRow('good', `Im Vergleich zum Vorjahr ist das Gewicht mit ${deltaKg>=0?'+':''}${fmtNum(deltaKg)} kg fast unverändert &mdash; übers Jahr gemittelt ergibt das rechnerisch eine <strong>nahezu ausgeglichene Kalorienbilanz</strong> (${sign}${fmtNum(kcalPerDay,1)} kcal/Tag). Kurzfristige Defizit-/Überschussphasen (siehe oben) gleichen sich demnach über das Jahr weitgehend aus.`);
-        } else {
-          const label2 = kcalPerDay >= 0 ? 'ein geschätzter Überschuss' : 'ein geschätztes Defizit';
-          addRow('neutral', `Im Jahresvergleich (${deltaKg>=0?'+':''}${fmtNum(deltaKg)} kg ggü. vor rund einem Jahr) ergibt sich im Mittel <strong>${label2} von rund ${fmtNum(Math.abs(kcalPerDay),0)} kcal/Tag</strong> über den gesamten Zeitraum.`);
-        }
+    const weightAllAsOf = dailyAsOf();
+    const refTsY = parseISO(refDate()).getTime();
+    const estY = estimateKcalPerDayPhysical(weightAllAsOf, refTsY, 365);
+    if(estY){
+      const deltaKg = estY.deltaWeight;
+      const kcalPerDay = estY.kcalPerDay;
+      const sign = kcalPerDay >= 0 ? '+' : '';
+      const modeNote = estY.mode === 'composition' ? '' : ' (vereinfacht, Körperzusammensetzung vor einem Jahr unvollständig)';
+      if(deltaKg != null && Math.abs(kcalPerDay) < 50){
+        addRow('good', `Im Vergleich zum Vorjahr ist das Gewicht mit ${deltaKg>=0?'+':''}${fmtNum(deltaKg)} kg fast unverändert &mdash; übers Jahr gemittelt ergibt das rechnerisch eine <strong>nahezu ausgeglichene Kalorienbilanz</strong> (${sign}${fmtNum(kcalPerDay,1)} kcal/Tag${modeNote}). Kurzfristige Defizit-/Überschussphasen (siehe oben) gleichen sich demnach über das Jahr weitgehend aus.`);
+      } else {
+        const label2 = kcalPerDay >= 0 ? 'ein geschätzter Überschuss' : 'ein geschätztes Defizit';
+        const deltaNote = deltaKg != null ? `${deltaKg>=0?'+':''}${fmtNum(deltaKg)} kg ggü. vor rund einem Jahr` : 'Fett-/Muskelmasse ggü. vor rund einem Jahr';
+        addRow('neutral', `Im Jahresvergleich (${deltaNote}) ergibt sich im Mittel <strong>${label2} von rund ${fmtNum(Math.abs(kcalPerDay),0)} kcal/Tag</strong> über den gesamten Zeitraum${modeNote}.`);
       }
     }
   }
@@ -874,13 +1158,56 @@ let mainChart, yearChart, compChart, measureChart;
 function renderMainChart(){
   const metric = state.metric;
   const points = filteredByRange(state.range);
+  // Wochenmittel bleiben als (unsichtbarer) Klick-Raster für die "Analyse-Datum"-Auswahl
+  // erhalten — die sichtbare Darstellung besteht seit Session 11 aus Einzelmesspunkten,
+  // 15-Tage-Trend und einem natürlichen-Schwankungsband (± 1 Std.-Abw. der Trend-
+  // Residuen), nicht mehr aus der Wochenmittel-Linie selbst.
   const weeks = weeklyAgg(points, metric);
+  // Einzelmesspunkte + 15-Tage-Trend + Schwankungsband nutzen dieselbe detrendDaily()-
+  // Basis wie die Frequenzanalyse/natürliche Schwankung (FREQ_TREND_WINDOW=15) —
+  // konsistente Trend-Definition dashboardweit; der Band-Radius (Std der Residuen) ist
+  // exakt dieselbe Zahl wie in der "natürliche Schwankung"-Erkenntniszeile (dort separat
+  // für 'weight' berechnet, hier generisch für die gewählte Kennzahl). detrendDaily()
+  // liefert null bei <10 gültigen Tageswerten (z.B. sehr kurzer Zeitraum bei einer
+  // lückenhaften Kennzahl) — in dem Fall bleiben Rohdaten/Trend/Band leer, nur das
+  // (unsichtbare) Wochenmittel-Klickraster bleibt nutzbar.
+  const det = detrendDaily(points, metric, FREQ_TREND_WINDOW);
+  const rawData = det ? det.dates.map((d,i) => ({ x: parseISO(d).getTime(), y: det.y[i] })) : [];
+  const trendData = det ? det.dates.map((d,i) => ({ x: parseISO(d).getTime(), y: det.trendAtT[i] })) : [];
+  let natStd = null;
+  if(det && det.resid.length >= 10){
+    const n = det.resid.length;
+    const meanR = det.resid.reduce((a,b)=>a+b,0) / n;
+    const varR = det.resid.reduce((a,b)=>a+(b-meanR)*(b-meanR),0) / (n-1);
+    natStd = Math.sqrt(varR);
+  }
+  const bandLowerData = natStd != null ? trendData.map(p => ({ x: p.x, y: p.y - natStd })) : [];
+  const bandUpperData = natStd != null ? trendData.map(p => ({ x: p.x, y: p.y + natStd })) : [];
+
   const textMuted = cssVar('--text-muted');
   const grid = cssVar('--grid');
   const baseline = cssVar('--baseline');
-  const seriesColor = cssVar('--s1');
+  const rawColor = cssVar('--s1');
+  const trendColor = cssVar('--s2');
+  const bandColor = cssVar('--s1');
+  const dangerColor = cssVar('--danger');
+  const surfaceColor = cssVar('--surface-1');
+  const textPrimary = cssVar('--text-primary');
 
   document.getElementById('mainChartTitle').textContent = METRIC_LABELS[metric] + 'sverlauf';
+
+  const bandLowerIdx = 0, bandUpperIdx = 1, weeklyIdx = 2, rawIdx = 3, trendIdx = 4;
+  const bandHidden = !state.errorBars || natStd == null;
+
+  const lastRaw = rawData.length ? rawData[rawData.length-1] : null;
+  const lastPointCfg = lastRaw ? {
+    point: lastRaw,
+    color: dangerColor,
+    surfaceColor: surfaceColor,
+    textColor: textPrimary,
+    label1: `${fmtNum(lastRaw.y)} ${METRIC_UNITS[metric]}`,
+    label2: new Date(lastRaw.x).toLocaleDateString('de-DE', {day:'2-digit', month:'2-digit', year:'numeric'}),
+  } : null;
 
   const ctx = document.getElementById('mainChart').getContext('2d');
   if(mainChart) mainChart.destroy();
@@ -889,29 +1216,126 @@ function renderMainChart(){
     data: {
       datasets: [
         {
+          label: 'Schwankungsband unten',
+          data: bandLowerData,
+          borderWidth: 0,
+          pointRadius: 0, pointHoverRadius: 0,
+          fill: false,
+          tension: 0,
+          spanGaps: true,
+          hidden: bandHidden,
+          order: 6,
+        },
+        {
+          label: 'natürliche Schwankung',
+          data: bandUpperData,
+          borderWidth: 0,
+          pointRadius: 0, pointHoverRadius: 0,
+          backgroundColor: bandColor + '2e',
+          fill: bandLowerIdx,
+          tension: 0,
+          spanGaps: true,
+          hidden: bandHidden,
+          order: 6,
+        },
+        {
           label: 'Wochenmittel',
           data: weeks,
-          borderColor: seriesColor,
-          backgroundColor: seriesColor + '1a',
-          borderWidth: 2,
-          pointRadius: 3, pointHoverRadius: 5,
-          pointBackgroundColor: seriesColor,
-          fill: true,
-          tension: 0.15,
+          borderColor: 'transparent',
+          backgroundColor: 'transparent',
+          borderWidth: 0,
+          pointRadius: 3, pointHoverRadius: 6,
+          pointBackgroundColor: 'transparent',
+          pointBorderColor: 'transparent',
+          fill: false,
           spanGaps: true,
-          errorBar: state.errorBars,
-          errorBarColor: seriesColor,
-        }
+          order: 5,
+        },
+        {
+          label: 'Einzelmesspunkte',
+          data: rawData,
+          showLine: false,
+          pointRadius: 2.5, pointHoverRadius: 4,
+          pointBackgroundColor: rawColor + 'b3',
+          pointBorderWidth: 0,
+          order: 3,
+        },
+        {
+          label: '15-Tage-Trend',
+          data: trendData,
+          borderColor: trendColor,
+          borderWidth: 2.2,
+          pointRadius: 0, pointHoverRadius: 0,
+          fill: false,
+          tension: 0,
+          spanGaps: true,
+          order: 2,
+        },
       ]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
+      // 'x' statt 'index': die Datasets (tägliche Rohdaten, 15-Tage-Trend, Wochenmittel-
+      // Klickraster, Schwankungsband) haben unterschiedlich viele/dicht platzierte Punkte
+      // — 'index' würde (wie beim dokumentierten Jahresvergleich-Bug) Punkte an derselben
+      // Array-Position statt am tatsächlichen X-Wert gruppieren. 'x' sucht je Dataset
+      // unabhängig den nächstgelegenen Punkt zum echten X-Pixel der Maus.
+      interaction: { mode: 'x', intersect: false },
+      // Chart.js löst onClick/onHover-Treffer über options.hover auf, NICHT über
+      // options.interaction (das steuert nur den Tooltip) — Default für hover ist
+      // {mode:'nearest', intersect:true}, was nur ein exaktes Treffen des winzigen
+      // Datenpunkts als Klick zählt. Explizit gesetzt, damit ein Klick irgendwo entlang
+      // der X-Achse zählt.
+      hover: { mode: 'x', intersect: false },
+      onClick: (evt, elements) => {
+        if(!elements || !elements.length) return;
+        // 'elements' kann Treffer aus mehreren Datasets enthalten — für die
+        // Analyse-Datum-Auswahl zählt gezielt der Treffer im (unsichtbaren)
+        // Wochenmittel-Klickraster, unabhängig davon, welches Dataset dem Mauszeiger am
+        // nächsten lag.
+        const el = elements.find(e => e.datasetIndex === weeklyIdx);
+        if(!el) return;
+        const idx = el.index;
+        const pt = weeks[idx];
+        if(!pt) return;
+        // Chart.js verarbeitet das Klick-Event nach Rückkehr aus onClick noch weiter
+        // (afterEvent-Plugins, internes Re-Render) — ein synchrones chart.destroy() aus
+        // rerenderAll() bricht das. Der State-Update läuft daher erst im nächsten
+        // Event-Loop-Tick.
+        if(idx === weeks.length - 1){
+          setTimeout(() => clearAsOf(), 0);
+        } else {
+          const clickedDate = fmtISODateLocal(new Date(pt.x));
+          setTimeout(() => setAsOf(clickedDate), 0);
+        }
+      },
       plugins: {
         legend: { display: false },
+        // Konfiguration für lastPointPlugin (siehe Registrierung oben) — nur mainChart.
+        lastPointHighlight: lastPointCfg,
         tooltip: {
           enabled: false,
-          external: (ctx) => weeklyTooltip(ctx, 'kg')
+          external: (context) => {
+            const tc = context.tooltip;
+            if(tc.opacity === 0){ hideTooltip(); return; }
+            if(!tc.dataPoints || !tc.dataPoints.length){ hideTooltip(); return; }
+            // Nur die Einzelmesspunkte bekommen eine Tooltip-Zeile — Wochenmittel-
+            // Klickraster und Schwankungsband sind reine Hilfs-/Hintergrund-Layer ohne
+            // eigene Anzeige (Trend hat pointRadius:0 und wird von Chart.js in diesem
+            // Interaction-Modus ohnehin nicht als Treffer geliefert).
+            const rows = tc.dataPoints.map(dp => {
+              if(dp.datasetIndex !== rawIdx) return null;
+              const raw = dp.raw;
+              const d = new Date(raw.x);
+              const color = dp.dataset.pointBackgroundColor;
+              return `<div class="t-row"><span class="t-key" style="background:${color}"></span><span class="t-name">Messung (${fmtDateShort(d)})</span><span class="t-val">${fmtNum(raw.y)} ${METRIC_UNITS[metric]}</span></div>`;
+            }).filter(Boolean).join('');
+            if(!rows){ hideTooltip(); return; }
+            const html = `<div class="t-date">${METRIC_LABELS[metric]}sverlauf</div>${rows}`;
+            const canvas = context.chart.canvas;
+            const rect = canvas.getBoundingClientRect();
+            showTooltip(rect.left + window.scrollX + tc.caretX, rect.top + window.scrollY + tc.caretY, html);
+          }
         }
       },
       scales: {
@@ -933,6 +1357,16 @@ function renderMainChart(){
       }
     }
   });
+
+  const legendEl = document.getElementById('mainLegend');
+  if(legendEl){
+    const bandLabel = natStd != null ? `natürliche Schwankung (± ${fmtNum(natStd)} ${METRIC_UNITS[metric]}, 1σ)` : null;
+    legendEl.innerHTML = `
+      <span class="item"><span class="swatch" style="background:${rawColor};height:8px;width:8px;border-radius:50%;"></span>Einzelmesspunkte</span>
+      <span class="item"><span class="swatch" style="background:${trendColor}"></span>15-Tage-Trend</span>
+      ${(!bandHidden && bandLabel) ? `<span class="item"><span class="swatch" style="background:${bandColor};opacity:.45;height:10px;border-radius:2px;"></span>${bandLabel}</span>` : ''}
+    `;
+  }
 
   renderMainTable(points, metric);
 }
@@ -989,7 +1423,13 @@ function renderYearChart(){
     data: { datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
+      // 'x' statt 'index': verschiedene Jahre sind unterschiedlich dicht/lückenhaft
+      // beprobt (z.B. 2023 erst ab Frühjahr, laufendes Jahr nur bis heute) — 'index'
+      // gruppiert Punkte an derselben Array-Position statt am tatsächlichen X-Wert und
+      // zeigt dadurch im Tooltip Werte aus faktisch unterschiedlichen Kalenderdaten unter
+      // einem gemeinsamen Datumslabel. 'x' sucht je Dataset unabhängig den nächstgelegenen
+      // Punkt zum echten X-Pixel der Maus.
+      interaction: { mode: 'x', intersect: false },
       plugins: {
         legend: { display:false },
         tooltip: {
@@ -1100,6 +1540,80 @@ function linReg(xs, ys){
   const slope = den === 0 ? 0 : num/den;
   return { slope, intercept: my - slope*mx };
 }
+
+// ---------- Student-t-Signifikanztest (für die Gewichtstrend-Insight) ----------
+// P(|T|>|t|) = I_x(df/2, 1/2) mit x = df/(df+t²) (Abramowitz & Stegun 26.7.5) — spart eine
+// numerische Integration der t-Dichtefunktion. Braucht nur logGamma (Lanczos-Approximation)
+// + betacf/betai (Kettenbruch-Auswertung der regularisierten unvollständigen
+// Beta-Funktion, Numerical-Recipes-Standardtechnik). Gegen scipy.stats.t abgeglichen
+// (6–8 signifikante Stellen Übereinstimmung).
+function logGamma(x){
+  const g = 7;
+  const c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+    771.32342877765313, -176.61502916214059, 12.507343278686905,
+    -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+  if(x < 0.5) return Math.log(Math.PI / Math.sin(Math.PI*x)) - logGamma(1-x);
+  x -= 1;
+  let a = c[0];
+  const t = x + g + 0.5;
+  for(let i=1;i<g+2;i++) a += c[i]/(x+i);
+  return 0.5*Math.log(2*Math.PI) + (x+0.5)*Math.log(t) - t + Math.log(a);
+}
+function betacf(x, a, b){
+  const MAXIT = 200, EPS = 3e-14, FPMIN = 1e-300;
+  const qab = a+b, qap = a+1, qam = a-1;
+  let c = 1, d = 1 - qab*x/qap;
+  if(Math.abs(d) < FPMIN) d = FPMIN;
+  d = 1/d;
+  let h = d;
+  for(let m=1, m2; m<=MAXIT; m++){
+    m2 = 2*m;
+    let aa = m*(b-m)*x/((qam+m2)*(a+m2));
+    d = 1 + aa*d; if(Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa/c; if(Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1/d; h *= d*c;
+    aa = -(a+m)*(qab+m)*x/((a+m2)*(qap+m2));
+    d = 1 + aa*d; if(Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa/c; if(Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1/d; const del = d*c; h *= del;
+    if(Math.abs(del-1) < EPS) break;
+  }
+  return h;
+}
+function betai(a, b, x){
+  if(x <= 0) return 0;
+  if(x >= 1) return 1;
+  const bt = Math.exp(logGamma(a+b) - logGamma(a) - logGamma(b) + a*Math.log(x) + b*Math.log(1-x));
+  if(x < (a+1)/(a+b+2)) return bt * betacf(x, a, b) / a;
+  return 1 - bt * betacf(1-x, b, a) / b;
+}
+function studentTTwoSidedP(t, df){
+  if(!isFinite(t) || df <= 0) return 1;
+  const x = df / (df + t*t);
+  return betai(df/2, 0.5, x);
+}
+const TREND_P_THRESHOLD = 0.05; // Signifikanzschwelle für die Gewichtstrend-Insight
+
+// Wie linReg(), ergänzt um Standardfehler der Steigung, t-Statistik und zweiseitigen
+// p-Wert (Freiheitsgrade n-2). Guards für n<3, Sxx=0 (entartete x-Werte) und residSS=0
+// (perfekter Fit bei sehr wenigen Punkten, p=0 statt Division durch Null).
+function linRegWithP(xs, ys){
+  const n = xs.length;
+  if(n < 3) return { slope: null, intercept: null, p: null };
+  const { slope, intercept } = linReg(xs, ys);
+  const mx = xs.reduce((a,b)=>a+b,0)/n;
+  const Sxx = xs.reduce((a,x)=>a+(x-mx)*(x-mx),0);
+  if(Sxx === 0) return { slope, intercept, p: null };
+  const residSS = ys.reduce((a,y,i) => { const pred = slope*xs[i]+intercept; return a+(y-pred)*(y-pred); }, 0);
+  const df = n - 2;
+  if(residSS === 0) return { slope, intercept, p: 0, df };
+  const sigma2 = residSS / df;
+  const seSlope = Math.sqrt(sigma2 / Sxx);
+  const tStat = seSlope === 0 ? Infinity : slope / seSlope;
+  const p = studentTTwoSidedP(tStat, df);
+  return { slope, intercept, p, seSlope, tStat, df };
+}
+
 function corrLabel(r, nWeeks){
   if(r == null || nWeeks < 3) return 'Zu wenige gemeinsame Wochen für eine verlässliche Korrelation.';
   const a = Math.abs(r);
@@ -1123,9 +1637,12 @@ function pairedWeeklyCorrelation(points, key){
 function weeklySlopePerMonth(points, key, maxWeeks=8){
   const allWeeks = weeklyAgg(points, key);
   const weeks = allWeeks.slice(-maxWeeks);
-  if(weeks.length < 3) return { slope: null, n: weeks.length };
-  const { slope } = linReg(weeks.map(w=>w.x), weeks.map(w=>w.y));
-  return { slope: slope * 86400000 * 30, n: weeks.length };
+  if(weeks.length < 3) return { slope: null, n: weeks.length, p: null };
+  // Wochenmittel sind (anders als Tageswerte) deutlich weniger autokorreliert — ein
+  // Standard-t-Test (linRegWithP) auf die Regressions-Steigung reicht hier aus, ein
+  // teurerer Block-Bootstrap wie bei der Frequenzanalyse ist nicht nötig.
+  const { slope, p } = linRegWithP(weeks.map(w=>w.x), weeks.map(w=>w.y));
+  return { slope: slope * 86400000 * 30, n: weeks.length, p };
 }
 
 // ---------- correlation: selected Kennzahl vs. Berlin monthly temperature ----------
@@ -1219,43 +1736,110 @@ function corrTooltip(context, metric){
   showTooltip(rect.left + window.scrollX + tc.caretX, rect.top + window.scrollY + tc.caretY, html);
 }
 
-// ---------- estimated caloric balance, derived from weekly weight change ----------
-const KCAL_PER_KG = 7700;
+// ---------- estimated caloric balance, derived from weight/body-composition change ----------
+// Physikalisches Modell (Session 12, 31.08.2026): eine Gewichtsänderung ist kein
+// homogenes Gewebe — sie setzt sich aus Fettmasse, fettfreier (v.a. Muskel-)Masse und
+// Körperwasser zusammen, und diese drei haben sehr unterschiedliche Energiedichten.
+// Die bis Session 11 verwendete Faustregel (1 kg Gewichtsänderung ≈ 7700 kcal, nach
+// Wishnofsky 1958 "3500 kcal/lb") unterstellt implizit, dass JEDE Gewichtsänderung
+// reines Fettgewebe ist — das ist bei kurzfristigen Schwankungen (Wasserhaushalt,
+// Glykogen-gebundenes Wasser, Verdauungsinhalt) physikalisch falsch: Wasser hat keinen
+// Brennwert, wiegt aber genauso viel wie Fett. Da das Dashboard über die Withings-
+// Bioimpedanzmessung bereits Fett- und Muskelmasse (kg) getrennt von Wasser und
+// Knochenmasse erfasst (siehe METRIC_LABELS), wird hier — wo für beide Vergleichspunkte
+// vorhanden — stattdessen gewebespezifisch gerechnet:
+//   ΔEnergie ≈ ΔFettmasse × FAT_KCAL_PER_KG + ΔMuskelmasse × LEAN_KCAL_PER_KG
+// Wasser- und Knochenmasseänderungen fließen bewusst mit 0 kcal/kg ein (kein Brennwert).
+// Energiedichten nach dem etablierten dynamischen Energiebilanzmodell von Hall et al.
+// (2011, "Quantification of the effect of energy imbalance on bodyweight"): Fettgewebe
+// ≈ 9400 kcal/kg (nahe am reinen Triglycerid-Brennwert von ~9441 kcal/kg), fettfreie
+// Masse (überwiegend Muskelprotein + zugehöriges Wasser) ≈ 1100 kcal/kg — deutlich
+// weniger als Fett, da Muskelgewebe zu rund drei Vierteln aus (kalorienfreiem) Wasser
+// besteht. Fehlt für einen Vergleichszeitpunkt Körperzusammensetzung (ältere/lückenhafte
+// Messungen), wird transparent auf die alte, vereinfachte Gewichts-Methode (7700 kcal/kg)
+// zurückgefallen — jede Rückgabestruktur trägt dafür ein `mode`-Feld ('composition' vs.
+// 'weight'), das die aufrufenden Render-Funktionen zur Kennzeichnung in der UI nutzen.
+const FAT_KCAL_PER_KG = 9400;
+const LEAN_KCAL_PER_KG = 1100;
+const KCAL_PER_KG = 7700; // Fallback-Faustregel (Wishnofsky), nur wenn Fett-/Muskeldaten fehlen
 let calorieChart;
+
+// Gemeinsamer Kern: aus zwei Mittelwert-Objekten (je {fat,muscle,weight}, wie von den
+// beiden konkreten Helfern unten geliefert) die kcal/Tag-Schätzung ableiten — bevorzugt
+// gewebespezifisch, sonst Gewichts-Fallback.
+function kcalPerDayFromDeltas(nowVals, pastVals, days){
+  if(nowVals.fat != null && pastVals.fat != null && nowVals.muscle != null && pastVals.muscle != null){
+    const deltaFat = nowVals.fat - pastVals.fat;
+    const deltaMuscle = nowVals.muscle - pastVals.muscle;
+    const kcalPerDay = (deltaFat * FAT_KCAL_PER_KG + deltaMuscle * LEAN_KCAL_PER_KG) / days;
+    return { kcalPerDay, mode: 'composition', deltaFat, deltaMuscle, deltaWeight: nowVals.weight != null && pastVals.weight != null ? nowVals.weight - pastVals.weight : null };
+  }
+  if(nowVals.weight == null || pastVals.weight == null) return null;
+  const deltaWeight = nowVals.weight - pastVals.weight;
+  const kcalPerDay = (deltaWeight * KCAL_PER_KG) / days;
+  return { kcalPerDay, mode: 'weight', deltaFat: null, deltaMuscle: null, deltaWeight };
+}
+
 function computeCalorieBalance(points){
-  const weeks = weeklyAgg(points, 'weight');
+  const weeksW = weeklyAgg(points, 'weight');
+  const fatByX = new Map(weeklyAgg(points, 'fat').map(w => [w.x, w.y]));
+  const muscleByX = new Map(weeklyAgg(points, 'muscle').map(w => [w.x, w.y]));
   const rows = [];
-  for(let i=1;i<weeks.length;i++){
-    const prev = weeks[i-1], cur = weeks[i];
+  for(let i=1;i<weeksW.length;i++){
+    const prev = weeksW[i-1], cur = weeksW[i];
     const days = (cur.x - prev.x) / 86400000;
     if(days <= 0) continue;
-    const deltaKg = cur.y - prev.y;
-    const kcalPerDay = (deltaKg * KCAL_PER_KG) / days;
-    rows.push({ x: cur.x, y: Math.round(kcalPerDay), deltaKg, days });
+    const nowVals = { weight: cur.y, fat: fatByX.has(cur.x) ? fatByX.get(cur.x) : null, muscle: muscleByX.has(cur.x) ? muscleByX.get(cur.x) : null };
+    const pastVals = { weight: prev.y, fat: fatByX.has(prev.x) ? fatByX.get(prev.x) : null, muscle: muscleByX.has(prev.x) ? muscleByX.get(prev.x) : null };
+    const est = kcalPerDayFromDeltas(nowVals, pastVals, days);
+    if(!est) continue;
+    rows.push({ x: cur.x, y: Math.round(est.kcalPerDay), deltaKg: cur.y - prev.y, deltaFat: est.deltaFat, deltaMuscle: est.deltaMuscle, mode: est.mode, days });
   }
   return rows;
 }
 
-// Rollierende Kurzfrist-Bilanz (gleiche Grundformel wie computeCalorieBalance:
-// Gewichtsdifferenz * 7700 kcal/kg / Tage), aber direkt aus den letzten `days` Rohtagen
-// statt aus Kalenderwochen — vergleicht den Mittelwert der letzten `days` Tage mit dem
-// Mittelwert der `days` Tage davor. Robuster als ein einzelner Tageswert, aber aktueller
-// als die wochenbasierte "Aktuelle Woche"-Kachel (die bei einer gerade erst begonnenen
-// Kalenderwoche nur wenige Tage enthalten kann).
+// Rollierende Kurzfrist-Bilanz — vergleicht den Mittelwert der letzten `days` Tage mit
+// dem Mittelwert der `days` Tage davor, gewebespezifisch wenn für beide Fenster genug
+// Fett-/Muskelmessungen vorliegen (Mittel über alle vorhandenen Tageswerte je Fenster),
+// sonst Gewichts-Fallback (gleiche Grundformel wie computeCalorieBalance). Robuster als
+// ein einzelner Tageswert, aber aktueller als die wochenbasierte "Aktuelle Woche"-Kachel
+// (die bei einer gerade erst begonnenen Kalenderwoche nur wenige Tage enthalten kann).
 function computeCalorieBalanceLastNDays(points, days){
   const sorted = points.filter(d => d.weight != null).slice().sort((a,b) => parseISO(a.date) - parseISO(b.date));
   if(!sorted.length) return null;
   const lastTs = parseISO(sorted[sorted.length-1].date).getTime();
   const cutRecent = lastTs - (days - 1) * 86400000;
   const cutPrior = lastTs - (2 * days - 1) * 86400000;
-  const recentVals = sorted.filter(d => parseISO(d.date).getTime() >= cutRecent).map(d => d.weight);
-  const priorVals = sorted.filter(d => { const t = parseISO(d.date).getTime(); return t >= cutPrior && t < cutRecent; }).map(d => d.weight);
-  if(!recentVals.length || !priorVals.length) return null;
-  const meanRecent = recentVals.reduce((a,b)=>a+b,0) / recentVals.length;
-  const meanPrior = priorVals.reduce((a,b)=>a+b,0) / priorVals.length;
-  const deltaKg = meanRecent - meanPrior;
-  const kcalPerDay = (deltaKg * KCAL_PER_KG) / days;
-  return { y: Math.round(kcalPerDay), deltaKg, n: recentVals.length };
+  const recent = sorted.filter(d => parseISO(d.date).getTime() >= cutRecent);
+  const prior = sorted.filter(d => { const t = parseISO(d.date).getTime(); return t >= cutPrior && t < cutRecent; });
+  if(!recent.length || !prior.length) return null;
+  const meanOf = (arr, key) => { const vals = arr.map(d => d[key]).filter(v => v != null); return vals.length ? vals.reduce((a,b)=>a+b,0) / vals.length : null; };
+  const nowVals = { weight: meanOf(recent,'weight'), fat: meanOf(recent,'fat'), muscle: meanOf(recent,'muscle') };
+  const pastVals = { weight: meanOf(prior,'weight'), fat: meanOf(prior,'fat'), muscle: meanOf(prior,'muscle') };
+  const est = kcalPerDayFromDeltas(nowVals, pastVals, days);
+  if(!est) return null;
+  return { y: Math.round(est.kcalPerDay), deltaKg: est.deltaWeight, deltaFat: est.deltaFat, deltaMuscle: est.deltaMuscle, mode: est.mode, n: recent.length };
+}
+
+// Wie computeCalorieBalanceLastNDays, aber auf Basis zweier zentrierter ±3-Tage-Fenster
+// (centeredWindowAvg) statt roher Tages-Mittel — gemeinsam genutzt von den Statistik-
+// Kacheln, der Kalorienbilanz-Karte und den Erkenntnis-Sätzen, damit alle drei Stellen
+// für denselben Referenzzeitpunkt exakt dieselbe Zahl zeigen (etabliertes Muster seit
+// Session 10). `all` sind ungefilterte Tagesdatensätze (dailyAsOf() o.ä.) — die einzelnen
+// centeredWindowAvg-Aufrufe filtern selbst je nach Kennzahl (weight/fat/muscle) auf
+// vorhandene Werte.
+function estimateKcalPerDayPhysical(all, refTs, windowDays){
+  const now = {
+    weight: centeredWindowAvg(all, 'weight', refTs, refTs)?.mean ?? null,
+    fat: centeredWindowAvg(all, 'fat', refTs, refTs)?.mean ?? null,
+    muscle: centeredWindowAvg(all, 'muscle', refTs, refTs)?.mean ?? null,
+  };
+  const past = {
+    weight: centeredWindowAvg(all, 'weight', refTs - windowDays*86400000, refTs)?.mean ?? null,
+    fat: centeredWindowAvg(all, 'fat', refTs - windowDays*86400000, refTs)?.mean ?? null,
+    muscle: centeredWindowAvg(all, 'muscle', refTs - windowDays*86400000, refTs)?.mean ?? null,
+  };
+  return kcalPerDayFromDeltas(now, past, windowDays);
 }
 
 // ---------- Frequenzanalyse der Gewichtsschwankung (Lomb-Scargle) ----------
@@ -1270,6 +1854,14 @@ const FREQ_PERIOD_MIN = 2;
 const FREQ_PERIOD_MAX = 21;
 const FREQ_PERIOD_STEPS = 240;
 const FREQ_FAP_THRESHOLD = 0.05; // Fehlalarm-Wahrscheinlichkeit, ab der eine Periode als "auffällig" gilt
+// Die analytische FAP (Horne & Baliunas, oben) nimmt weißes Rauschen an und ist bei
+// autokorrelierten ("roten") Gewichts-Residuen tendenziell zu optimistisch. Die
+// Sichtbarkeit der Zyklus-Kachel hängt daher nicht mehr von fap, sondern vom robusteren
+// Block-Bootstrap-p-Wert unten ab (fap bleibt nur als Referenzwert im Rückgabeobjekt).
+const FREQ_BOOTSTRAP_P_THRESHOLD = 0.05; // Block-Bootstrap-Signifikanzschwelle
+const FREQ_BOOTSTRAP_REPS = 150;         // Wiederholungen je getesteter Blockgröße
+const FREQ_BOOTSTRAP_BLOCKS = [3, 10];   // Blockgrößen in Messpunkten (kurz + länger); der ungünstigere (höhere) p-Wert entscheidet
+const FREQ_BOOTSTRAP_PERIOD_STEPS = 120; // gröberes Perioden-Raster für den Nulltest (nur das Maximum je Surrogat zählt)
 
 // Baut aus unregelmäßig beabstandeten Tageswerten ein dichtes Tagesraster (lineare
 // Interpolation), berechnet darauf ein randgepolstertes gleitendes Mittel (kein
@@ -1318,8 +1910,84 @@ function detrendDaily(points, key, trendWindowDays){
 // Zwischenwerte (tau, Ac, As) am Maximum zurück, aus denen sich die angepasste
 // Sinuskurve rekonstruieren lässt (für die Zyklustag-Berechnung unten) — ohne sie am
 // Maximum ein zweites Mal berechnen zu müssen.
+// Block-Bootstrap-Nulltest für die Frequenzanalyse: mischt das (vom 15-Tage-Trend
+// befreite) Residuum blockweise durch (erhält die kurzfristige Autokorrelation, zerstört
+// aber jede echte Periodizität), berechnet je Surrogat die maximale Periodogramm-Power
+// über das gesamte 2–21-Tage-Raster und bestimmt den p-Wert als Anteil der Surrogate,
+// die die beobachtete Peak-Power erreichen/übertreffen. Getestet über mehrere
+// Blockgrößen (FREQ_BOOTSTRAP_BLOCKS) — der jeweils ungünstigere (höhere) p-Wert
+// entscheidet, um nicht von einer einzelnen günstigen Blockgrößen-Wahl abhängig zu sein.
+//
+// Performance: tau, cos(w(t-tau)), sin(w(t-tau)) und die Nenner-Summen hängen nur von
+// den (unveränderten) Messzeitpunkten t ab, nicht von der (durchgemischten) Werte-
+// Reihenfolge — daher werden sie EINMAL je Kandidaten-Periode vorberechnet statt bei
+// jeder der reps*blocks Wiederholungen neu (sonst im Browser zu langsam). Mittelwert und
+// Varianz des Residuums bleiben unter jeder Blockumordnung ebenfalls identisch, daher
+// ebenfalls nur einmal berechnet.
+function blockBootstrapPValue(t, resid, observedMaxPower){
+  const n = t.length;
+  const periods = [];
+  for(let i=0;i<FREQ_BOOTSTRAP_PERIOD_STEPS;i++){
+    periods.push(FREQ_PERIOD_MIN + (FREQ_PERIOD_MAX-FREQ_PERIOD_MIN)*i/(FREQ_BOOTSTRAP_PERIOD_STEPS-1));
+  }
+  const pre = periods.map(per => {
+    const w = 2*Math.PI/per;
+    let sumSin2wt = 0, sumCos2wt = 0;
+    for(let i=0;i<n;i++){ sumSin2wt += Math.sin(2*w*t[i]); sumCos2wt += Math.cos(2*w*t[i]); }
+    const tau = Math.atan2(sumSin2wt, sumCos2wt) / (2*w);
+    const c = new Array(n), s = new Array(n);
+    let denC = 0, denS = 0;
+    for(let i=0;i<n;i++){
+      c[i] = Math.cos(w*(t[i]-tau));
+      s[i] = Math.sin(w*(t[i]-tau));
+      denC += c[i]*c[i]; denS += s[i]*s[i];
+    }
+    return { c, s, denC, denS };
+  });
+
+  const mean = resid.reduce((a,b)=>a+b,0) / n;
+  const yc0 = resid.map(v => v - mean);
+  const variance = yc0.reduce((a,b)=>a+b*b,0) / n;
+  if(variance <= 0) return 1;
+
+  function maxPowerFor(yc){
+    let maxP = 0;
+    for(const { c, s, denC, denS } of pre){
+      let numC = 0, numS = 0;
+      for(let i=0;i<n;i++){ numC += yc[i]*c[i]; numS += yc[i]*s[i]; }
+      const P = 0.5 * ((numC*numC/denC) + (numS*numS/denS)) / variance;
+      if(P > maxP) maxP = P;
+    }
+    return maxP;
+  }
+
+  function blockShuffle(arr, blockSize){
+    const blocks = [];
+    for(let i=0;i<arr.length;i+=blockSize) blocks.push(arr.slice(i, i+blockSize));
+    for(let i=blocks.length-1;i>0;i--){
+      const j = Math.floor(Math.random()*(i+1));
+      const tmp = blocks[i]; blocks[i] = blocks[j]; blocks[j] = tmp;
+    }
+    return [].concat(...blocks);
+  }
+
+  let worstP = 0;
+  for(const blockSize of FREQ_BOOTSTRAP_BLOCKS){
+    let hits = 0;
+    for(let r=0;r<FREQ_BOOTSTRAP_REPS;r++){
+      const shuffled = blockShuffle(yc0, blockSize);
+      if(maxPowerFor(shuffled) >= observedMaxPower) hits++;
+    }
+    const p = hits / FREQ_BOOTSTRAP_REPS;
+    if(p > worstP) worstP = p;
+  }
+  return worstP;
+}
+
 function computeWeightFrequency(){
-  const weightPoints = DAILY.filter(d => d.weight != null);
+  // dailyAsOf() statt der kompletten DAILY: macht die Frequenzanalyse und damit
+  // automatisch auch computeCycleDayInfo()/die "X-Tage-Zyklus"-Kachel asOf-bewusst.
+  const weightPoints = dailyAsOf().filter(d => d.weight != null);
   if(weightPoints.length < 30) return null;
   const lastDate = parseISO(weightPoints[weightPoints.length-1].date);
   const cutoff = new Date(lastDate.getTime() - FREQ_WINDOW_DAYS * 86400000);
@@ -1380,9 +2048,10 @@ function computeWeightFrequency(){
 
   const M = periods.length;
   const fap = 1 - Math.pow(1 - Math.exp(-best.P), M);
+  const bootstrapP = blockBootstrapPValue(det.t, det.resid, best.P);
   return {
-    periods, power, peakPeriod: best.period, peakPower: best.P, fap,
-    significant: fap < FREQ_FAP_THRESHOLD,
+    periods, power, peakPeriod: best.period, peakPower: best.P, fap, bootstrapP,
+    significant: bootstrapP < FREQ_BOOTSTRAP_P_THRESHOLD,
     w: best.w, tau: best.tau, Ac: best.Ac, As: best.As, mean,
     t: det.t, resid: det.resid, n,
     residStd: Math.sqrt(yc.reduce((a,b)=>a+b*b,0) / n),
@@ -1417,7 +2086,9 @@ function computeCycleDayInfo(freq){
 // Nutzt bewusst die komplette Historie (nicht den Zeitraum-Filter), analog zum
 // Jahresvergleich, da "Gesamtstreuung" eine über alle Daten gepoolte Kennzahl ist.
 function computeNormalizedDispersion(){
-  const weightPoints = DAILY.filter(d => d.weight != null);
+  // dailyAsOf() statt der kompletten DAILY — wird nur aus renderInsights() heraus
+  // aufgerufen und gehört damit zur "Aktueller Stand"-Klasse (reist mit state.asOf mit).
+  const weightPoints = dailyAsOf().filter(d => d.weight != null);
   const det = detrendDaily(weightPoints, 'weight', FREQ_TREND_WINDOW);
   if(!det || det.t.length < 30) return null;
   const n = det.resid.length;
@@ -1686,20 +2357,35 @@ function renderCalorieChart(){
   const posColor = cssVar('--s8');
   const negColor = cssVar('--s1');
 
-  const latest = rows.length ? rows[rows.length-1] : null;
+  // pointsAsOf: dailyAsOf()-basiert (nicht auf den gewählten Zeitraum-Filter
+  // beschränkt — points bleibt dafür da, für den Balken-Chart, der unverändert bleibt),
+  // damit auch bei kurzem gewähltem Zeitraum genug Tage für das 28-Tage-Fenster
+  // verfügbar sind — analog zur Kalorienbilanz-Kachel im Statistik-Raster. Mit Absicht
+  // an die gleichnamigen Kacheln dort angeglichen, damit beide Kartenbereiche für
+  // denselben Referenzzeitpunkt dieselbe Zahl zeigen.
+  const allAsOfCal = dailyAsOf();
+  const refTsCal = parseISO(refDate()).getTime();
+  // Modus-Suffix wie bei den Statistik-Kacheln (siehe calorieModeSuffix in renderStats) —
+  // hier lokal dupliziert, da renderCalorieChart() eine eigene Funktion ist.
+  const calModeSuffix = mode => mode === 'composition' ? ' · aus Fett-/Muskelmasse' : ' · vereinfacht (nur Gewicht)';
+
   const weekEl = document.getElementById('calorieStatWeek');
   if(weekEl){
-    weekEl.textContent = latest
-      ? `${latest.y>=0?'+':''}${fmtNum(latest.y,0)} kcal/Tag`
-      : '–';
-    weekEl.title = latest ? `Woche bis ${fmtDateShort(new Date(latest.x))}` : '';
+    const estWeek = estimateKcalPerDayPhysical(allAsOfCal, refTsCal, 7);
+    if(estWeek){
+      weekEl.textContent = `${estWeek.kcalPerDay>=0?'+':''}${fmtNum(estWeek.kcalPerDay,0)} kcal/Tag`;
+      weekEl.title = `${isHistoricalAsOf() ? 'Stand' : 'Aktuelle Woche'} um ${fmtDateShort(parseISO(refDate()))}${calModeSuffix(estWeek.mode)}`;
+    } else {
+      weekEl.textContent = '–';
+      weekEl.title = '';
+    }
   }
   const sevenDayEl = document.getElementById('calorieStat7d');
   if(sevenDayEl){
-    const r7 = computeCalorieBalanceLastNDays(points, 7);
+    const r7 = computeCalorieBalanceLastNDays(allAsOfCal, 7);
     if(r7){
       sevenDayEl.textContent = `${r7.y>=0?'+':''}${fmtNum(r7.y,0)} kcal/Tag`;
-      sevenDayEl.title = `Letzte 7 Tage (Ø ${r7.n} Messtage) vs. die 7 Tage davor`;
+      sevenDayEl.title = `Letzte 7 Tage (Ø ${r7.n} Messtage) vs. die 7 Tage davor${calModeSuffix(r7.mode)}`;
     } else {
       sevenDayEl.textContent = '–';
       sevenDayEl.title = '';
@@ -1707,14 +2393,27 @@ function renderCalorieChart(){
   }
   const fourWkEl = document.getElementById('calorieStat4wk');
   if(fourWkEl){
-    const recent = rows.slice(-4);
-    if(recent.length){
-      const avg = recent.reduce((a,r) => a + r.y, 0) / recent.length;
-      fourWkEl.textContent = `${avg>=0?'+':''}${fmtNum(avg,0)} kcal/Tag`;
-      fourWkEl.title = `Mittel über die letzten ${recent.length} Wochen mit Daten`;
+    const est4wkCal = estimateKcalPerDayPhysical(allAsOfCal, refTsCal, 28);
+    if(est4wkCal){
+      fourWkEl.textContent = `${est4wkCal.kcalPerDay>=0?'+':''}${fmtNum(est4wkCal.kcalPerDay,0)} kcal/Tag`;
+      fourWkEl.title = `Heute vs. vor 28 Tagen${calModeSuffix(est4wkCal.mode)}`;
     } else {
       fourWkEl.textContent = '–';
       fourWkEl.title = '';
+    }
+  }
+  // 60 Tage: gleiches Prinzip (zentriertes Fenster, Endpunkt-Vergleich heute vs. vor 60
+  // Tagen) wie die bereits bestehende "Veränderung 60 Tage"-Kachel im Statistik-Raster
+  // für Gewicht/Kennzahlen — hier dieselbe Fensterbreite für die Kalorienbilanz ergänzt.
+  const sixtyDayEl = document.getElementById('calorieStat60d');
+  if(sixtyDayEl){
+    const est60dCal = estimateKcalPerDayPhysical(allAsOfCal, refTsCal, 60);
+    if(est60dCal){
+      sixtyDayEl.textContent = `${est60dCal.kcalPerDay>=0?'+':''}${fmtNum(est60dCal.kcalPerDay,0)} kcal/Tag`;
+      sixtyDayEl.title = `Heute vs. vor 60 Tagen${calModeSuffix(est60dCal.mode)}`;
+    } else {
+      sixtyDayEl.textContent = '–';
+      sixtyDayEl.title = '';
     }
   }
 
@@ -1726,7 +2425,10 @@ function renderCalorieChart(){
       datasets: [{
         label: 'Kalorienbilanz',
         data: rows,
-        backgroundColor: rows.map(r => r.y >= 0 ? posColor + 'cc' : negColor + 'cc'),
+        // Balken mit Gewichts-Fallback (mode:'weight', keine Fett-/Muskeldaten für diese
+        // Woche vorhanden) werden blasser dargestellt als gewebespezifisch berechnete
+        // Balken — signalisiert die geringere methodische Verlässlichkeit direkt im Chart.
+        backgroundColor: rows.map(r => (r.y >= 0 ? posColor : negColor) + (r.mode === 'composition' ? 'cc' : '55')),
         borderRadius: 4,
         barThickness: 10,
       }]
@@ -1760,9 +2462,14 @@ function calorieTooltip(context){
   if(tc.opacity === 0){ hideTooltip(); return; }
   if(!tc.dataPoints || !tc.dataPoints.length){ hideTooltip(); return; }
   const raw = tc.dataPoints[0].raw;
+  const compRows = raw.mode === 'composition'
+    ? `<div class="t-row"><span class="t-name">Δ Fettmasse</span><span class="t-val">${raw.deltaFat>=0?'+':''}${fmtNum(raw.deltaFat)} kg</span></div>
+    <div class="t-row"><span class="t-name">Δ Muskelmasse</span><span class="t-val">${raw.deltaMuscle>=0?'+':''}${fmtNum(raw.deltaMuscle)} kg</span></div>`
+    : `<div class="t-row"><span class="t-name">Methode</span><span class="t-val">vereinfacht (nur Gewicht)</span></div>`;
   const html = `<div class="t-date">Woche bis ${fmtDateShort(new Date(raw.x))}</div>
     <div class="t-row"><span class="t-name">Bilanz</span><span class="t-val">${raw.y>=0?'+':''}${fmtNum(raw.y,0)} kcal/Tag</span></div>
-    <div class="t-row"><span class="t-name">Gewichtsänderung</span><span class="t-val">${raw.deltaKg>=0?'+':''}${fmtNum(raw.deltaKg)} kg</span></div>`;
+    <div class="t-row"><span class="t-name">Gewichtsänderung</span><span class="t-val">${raw.deltaKg>=0?'+':''}${fmtNum(raw.deltaKg)} kg</span></div>
+    ${compRows}`;
   const canvas = context.chart.canvas;
   const rect = canvas.getBoundingClientRect();
   showTooltip(rect.left + window.scrollX + tc.caretX, rect.top + window.scrollY + tc.caretY, html);
@@ -2104,6 +2811,7 @@ function showLoginError(msg){
 async function bootDashboard(){
   loginGate.classList.add('hidden');
   dashboardRoot.classList.remove('hidden');
+  syncAsOfUI();
   rerenderAll();
   renderMeasurements();
   await loadRealWeather();
