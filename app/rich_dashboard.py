@@ -159,6 +159,7 @@ def rich_dashboard_html() -> str:
   .card-head { display:flex; justify-content:space-between; align-items:center; gap: 12px; flex-wrap:wrap; margin-bottom: 10px; }
   .card-head h2 { font-size: 15px; font-weight: 650; margin:0; }
   .card-head .card-sub { font-size:12px; color:var(--text-muted); margin-top:2px; }
+  .stat-grid-hint { font-size:12px; color:var(--text-muted); margin: 0 0 10px; line-height:1.5; }
   .temp-data-badge { display:inline-block; font-size:10.5px; font-weight:650; letter-spacing:.02em; padding:2px 7px; border-radius:20px; margin-left:8px; vertical-align:middle; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
   .temp-data-badge.live { background: rgba(12,163,12,0.12); color: var(--success); border-color: rgba(12,163,12,0.35); }
   .weather-status-bar { display:none; font-size:12.5px; line-height:1.5; padding:9px 14px; border-radius:8px; margin-bottom:14px; background: var(--surface-2); color: var(--text-secondary); border: 1px solid var(--border); }
@@ -321,6 +322,7 @@ def rich_dashboard_html() -> str:
     <div class="spacer"></div>
   </div>
 
+  <p class="stat-grid-hint">"Veränderung"- und "Kalorienbilanz"-Kacheln vergleichen keine einzelnen Rohmesswerte, sondern je ein zentriertes ±3-Tage-Mittel um den Bezugstag (heute bzw. Analyse-Datum) und um den jeweiligen Vergleichszeitpunkt (z.&nbsp;B. vor 90 Tagen) &mdash; das glättet Tagesrauschen (Wasserhaushalt, Verdauung) heraus.</p>
   <div class="stat-grid" id="statGrid"></div>
 
   <div class="card">
