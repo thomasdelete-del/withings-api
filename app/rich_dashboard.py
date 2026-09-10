@@ -419,12 +419,16 @@ def rich_dashboard_html() -> str:
         <div class="value" id="calorieStat7d">–</div>
       </div>
       <div class="stat-tile mini">
-        <div class="label">Letzte 4 Wochen (Ø)</div>
-        <div class="value" id="calorieStat4wk">–</div>
+        <div class="label">Letzte 30 Tage (Ø)</div>
+        <div class="value" id="calorieStat30d">–</div>
       </div>
       <div class="stat-tile mini">
         <div class="label">Letzte 60 Tage (Ø)</div>
         <div class="value" id="calorieStat60d">–</div>
+      </div>
+      <div class="stat-tile mini">
+        <div class="label">Letzte 90 Tage (Ø)</div>
+        <div class="value" id="calorieStat90d">–</div>
       </div>
     </div>
     <p class="note">Rot = geschätzter Kalorienüberschuss, Blau = geschätztes Kaloriendefizit gegenüber dem eigenen Verbrauch &mdash; berechnet allein aus der Gewichtsänderung, nicht aus tatsächlich geloggtem Essen: Gewichtsänderung × 7700 kcal/kg (Wishnofsky 1958, "3500 kcal/lb"). Das bleibt in jedem Fall eine Bilanz (Über-/Unterschuss), keine gemessene Kalorienaufnahme; kurzfristige Wassereinlagerungen, Verdauungsinhalt und die natürliche Tag-zu-Tag-Schwankung des Gewichts verzerren das Ergebnis weiterhin, besonders über sehr kurze Zeiträume.</p>
@@ -826,8 +830,8 @@ function fourWeekTooltip(context, unit){
 // ---------- stat tiles ----------
 // Beziehen sich per Klick auf die Hauptkurve oder das "Analyse-Datum"-Feld optional auf
 // ein historisches Datum statt auf den letzten Messtag ("Stand" statt "Aktuell") — siehe
-// state.asOf/refDate() oben. Die "Veränderung"-Kacheln und die Kalorienbilanz (4 Wochen)
-// nutzen dafür ein zentriertes ±3-Tage-Fenster (centeredWindowAvg) statt eines
+// state.asOf/refDate() oben. Die "Veränderung"-Kacheln und die Kalorienbilanz-Kacheln
+// (30/60/90 Tage) nutzen dafür ein zentriertes ±3-Tage-Fenster (centeredWindowAvg) statt eines
 // Kalenderwochen-Mittels: Randfall "jetzt"/gewähltes Datum = rückblickendes 4-Tage-
 // Fenster (volles zentriertes Fenster reicht in die Zukunft), Vergleichszeitpunkte in der
 // Vergangenheit = volles zentriertes 7-Tage-Fenster.
@@ -893,16 +897,18 @@ function renderStats(){
     });
   }
 
-  // Kalorienbilanz (4 Wochen): zentriertes ±3-Tage-Fenster (heute-Fenster vs. vor-28-
+  // Kalorienbilanz (30 Tage): zentriertes ±3-Tage-Fenster (heute-Fenster vs. vor-30-
   // Tagen-Fenster) statt eines Mittels über vier Kalenderwochen-Deltas — macht diese
   // Kachel konsistent mit der gleichnamigen Mini-Kachel der Kalorienbilanz-Karte unten
-  // und dem entsprechenden Erkenntnisse-Satz (dieselbe Formel, dieselbe Zahl).
-  const est4wk = estimateKcalPerDayFromWeight(allAsOf, refTs, 28);
-  if(est4wk){
+  // und dem entsprechenden Erkenntnisse-Satz (dieselbe Formel, dieselbe Zahl). Vormals
+  // "Kalorienbilanz (4 Wochen)" (28 Tage) — auf Nutzerwunsch auf 30 Tage umgestellt, um
+  // sprachlich/zahlenmäßig zur "Veränderung 30 Tage"-Kachel oben zu passen.
+  const est30d = estimateKcalPerDayFromWeight(allAsOf, refTs, 30);
+  if(est30d){
     tiles.push({
-      label: 'Kalorienbilanz (4 Wochen)',
-      value: calorieTileHtml(est4wk.kcalPerDay),
-      delta: `<div class="delta flat">Heute vs. vor 28 Tagen</div>`,
+      label: 'Kalorienbilanz (30 Tage)',
+      value: calorieTileHtml(est30d.kcalPerDay),
+      delta: `<div class="delta flat">Heute vs. vor 30 Tagen</div>`,
     });
   }
 
@@ -916,6 +922,16 @@ function renderStats(){
       label: 'Kalorienbilanz (60 Tage)',
       value: calorieTileHtml(est60d.kcalPerDay),
       delta: `<div class="delta flat">Heute vs. vor 60 Tagen</div>`,
+    });
+  }
+
+  // Kalorienbilanz (90 Tage): analog zur "Veränderung 90 Tage"-Kachel oben ergänzt.
+  const est90d = estimateKcalPerDayFromWeight(allAsOf, refTs, 90);
+  if(est90d){
+    tiles.push({
+      label: 'Kalorienbilanz (90 Tage)',
+      value: calorieTileHtml(est90d.kcalPerDay),
+      delta: `<div class="delta flat">Heute vs. vor 90 Tagen</div>`,
     });
   }
 
@@ -1042,14 +1058,14 @@ function renderInsights(){
 
   // Estimated calorie balance — folgt seit Session 13 dem gewählten Zeitraum-Filter
   // (auf Nutzerwunsch "Erkenntnisse müssen ebenfalls auf den Zeitraum angepasst
-  // werden") statt eines fixen 28-Tage-Fensters: `spanDays` (oben bei "Tracking
+  // werden") statt eines fixen Tage-Fensters: `spanDays` (oben bei "Tracking
   // consistency" berechnet, = tatsächliche Tagesspanne der Zeitraum-gefilterten
   // `points`) steuert jetzt das Vergleichsfenster von estimateKcalPerDayFromWeight().
-  // Bewusst NICHT mehr an die feste "Kalorienbilanz (4 Wochen)"-Kachel im
-  // Statistik-Raster gekoppelt (die bleibt als benannter fixer Referenzwert bei 28
-  // Tagen bestehen, siehe renderStats()) — bei einer von "4 Wochen" abweichenden
-  // Zeitraum-Auswahl zeigen Kachel und dieser Erkenntnis-Satz jetzt bewusst
-  // unterschiedliche Zahlen (Kachel = fixer Vergleichswert, Satz = gewählter Zeitraum).
+  // Bewusst NICHT an die festen "Kalorienbilanz (30/60/90 Tage)"-Kacheln im
+  // Statistik-Raster gekoppelt (die bleiben als benannte fixe Referenzwerte bestehen,
+  // siehe renderStats()) — bei einer davon abweichenden Zeitraum-Auswahl zeigen Kacheln
+  // und dieser Erkenntnis-Satz jetzt bewusst unterschiedliche Zahlen (Kacheln = fixe
+  // Vergleichswerte, Satz = gewählter Zeitraum).
   {
     const refTsIns = parseISO(refDate()).getTime();
     const est4wkIns = estimateKcalPerDayFromWeight(points, refTsIns, spanDays);
@@ -2377,8 +2393,9 @@ function renderCalorieChart(){
 
   // pointsAsOf: dailyAsOf()-basiert (nicht auf den gewählten Zeitraum-Filter
   // beschränkt — points bleibt dafür da, für den Balken-Chart, der unverändert bleibt),
-  // damit auch bei kurzem gewähltem Zeitraum genug Tage für das 28-Tage-Fenster
-  // verfügbar sind — analog zur Kalorienbilanz-Kachel im Statistik-Raster. Mit Absicht
+  // damit auch bei kurzem gewähltem Zeitraum genug Tage für das jeweilige Vergleichs-
+  // fenster (30/60/90 Tage) verfügbar sind — analog zur Kalorienbilanz-Kachel im
+  // Statistik-Raster. Mit Absicht
   // an die gleichnamigen Kacheln dort angeglichen, damit beide Kartenbereiche für
   // denselben Referenzzeitpunkt dieselbe Zahl zeigen.
   const allAsOfCal = dailyAsOf();
@@ -2406,15 +2423,15 @@ function renderCalorieChart(){
       sevenDayEl.title = '';
     }
   }
-  const fourWkEl = document.getElementById('calorieStat4wk');
-  if(fourWkEl){
-    const est4wkCal = estimateKcalPerDayFromWeight(allAsOfCal, refTsCal, 28);
-    if(est4wkCal){
-      fourWkEl.textContent = `${est4wkCal.kcalPerDay>=0?'+':''}${fmtNum(est4wkCal.kcalPerDay,0)} kcal/Tag`;
-      fourWkEl.title = `Heute vs. vor 28 Tagen`;
+  const thirtyDayEl = document.getElementById('calorieStat30d');
+  if(thirtyDayEl){
+    const est30dCal = estimateKcalPerDayFromWeight(allAsOfCal, refTsCal, 30);
+    if(est30dCal){
+      thirtyDayEl.textContent = `${est30dCal.kcalPerDay>=0?'+':''}${fmtNum(est30dCal.kcalPerDay,0)} kcal/Tag`;
+      thirtyDayEl.title = `Heute vs. vor 30 Tagen`;
     } else {
-      fourWkEl.textContent = '–';
-      fourWkEl.title = '';
+      thirtyDayEl.textContent = '–';
+      thirtyDayEl.title = '';
     }
   }
   // 60 Tage: gleiches Prinzip (zentriertes Fenster, Endpunkt-Vergleich heute vs. vor 60
@@ -2429,6 +2446,18 @@ function renderCalorieChart(){
     } else {
       sixtyDayEl.textContent = '–';
       sixtyDayEl.title = '';
+    }
+  }
+  // 90 Tage: analog zur "Veränderung 90 Tage"-Kachel im Statistik-Raster ergänzt.
+  const ninetyDayEl = document.getElementById('calorieStat90d');
+  if(ninetyDayEl){
+    const est90dCal = estimateKcalPerDayFromWeight(allAsOfCal, refTsCal, 90);
+    if(est90dCal){
+      ninetyDayEl.textContent = `${est90dCal.kcalPerDay>=0?'+':''}${fmtNum(est90dCal.kcalPerDay,0)} kcal/Tag`;
+      ninetyDayEl.title = `Heute vs. vor 90 Tagen`;
+    } else {
+      ninetyDayEl.textContent = '–';
+      ninetyDayEl.title = '';
     }
   }
 
