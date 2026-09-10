@@ -863,6 +863,7 @@ function renderStats(){
     { label: 'Letzte 7 Tage (Ø)', value: lastVal!=null ? `${fmtNum(lastVal)} ${unit}` : '–', delta: `<div class="delta flat">${fmtDateShort(last7Start)} – ${fmtDateShort(last7End)}</div>` },
     changeTile('Veränderung 30 Tage', 30),
     changeTile('Veränderung 60 Tage', 60),
+    changeTile('Veränderung 90 Tage', 90),
     changeTile('Veränderung 1 Jahr', 365),
   ];
 
