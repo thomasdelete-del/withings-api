@@ -289,6 +289,7 @@ def rich_dashboard_html() -> str:
       <span class="filter-label">Zeitraum</span>
       <div class="pill-group" id="rangeGroup">
         <button class="pill" data-range="30">30T</button>
+        <button class="pill" data-range="60">60T</button>
         <button class="pill" data-range="90">90T</button>
         <button class="pill" data-range="180">6M</button>
         <button class="pill active" data-range="365">1J</button>
@@ -360,7 +361,7 @@ def rich_dashboard_html() -> str:
     <div class="card-head">
       <div>
         <h2>Körperzusammensetzung</h2>
-        <div class="card-sub">Fettmasse, Muskelmasse, Wasseranteil, Knochenmasse (kg), Wochenmittel im gewählten Zeitraum &mdash; je eigene Skala, Fehlerbalken = ± 1 Standardabweichung der Woche</div>
+        <div class="card-sub">Fettmasse, Muskelmasse, Wasseranteil, Knochenmasse (kg), 4-Wochen-Mittel im gewählten Zeitraum &mdash; je eigene Skala, Fehlerbalken = ± 1 Standardabweichung des 4-Wochen-Blocks</div>
       </div>
     </div>
     <div class="comp-grid" id="compGrid">
@@ -402,7 +403,7 @@ def rich_dashboard_html() -> str:
     <div class="card-head">
       <div>
         <h2>Geschätzte Kalorienbilanz</h2>
-        <div class="card-sub">Physikalisches Modell: aus Fett- und Muskelmasseänderung abgeleitet (Fett ≈ 9400 kcal/kg, Muskel ≈ 1100 kcal/kg) — sonst vereinfacht aus der Gewichtsänderung (1 kg ≈ 7700 kcal)</div>
+        <div class="card-sub">Aus der Gewichtsänderung abgeleitet (1 kg ≈ 7700 kcal, Wishnofsky-Faustregel)</div>
       </div>
     </div>
     <div class="chart-box"><canvas id="calorieChart"></canvas></div>
@@ -424,7 +425,7 @@ def rich_dashboard_html() -> str:
         <div class="value" id="calorieStat60d">–</div>
       </div>
     </div>
-    <p class="note">Rot = geschätzter Kalorienüberschuss, Blau = geschätztes Kaloriendefizit gegenüber dem eigenen Verbrauch &mdash; berechnet allein aus der Körperzusammensetzung, nicht aus tatsächlich geloggtem Essen. Wenn für den Vergleichszeitraum Fett- und Muskelmasse vorliegen (Withings-Bioimpedanz), wird gewebespezifisch gerechnet: Fettmasseänderung × 9400 kcal/kg + Muskelmasseänderung × 1100 kcal/kg, Wasser- und Knochenmasseänderungen zählen mit 0 kcal/kg, da sie physikalisch keinen Brennwert haben. Blasse Balken markieren Wochen, für die das nicht möglich war &mdash; dort wird auf die alte, vereinfachte Faustregel (Gewichtsänderung × 7700 kcal/kg) zurückgegriffen, die implizit unterstellt, jede Gewichtsänderung sei reines Fettgewebe. Das bleibt in jedem Fall eine Bilanz (Über-/Unterschuss), keine gemessene Kalorienaufnahme; Messungenauigkeit der Bioimpedanz sowie kurzfristige Wassereinlagerungen in Fett-/Muskelwert verzerren das Ergebnis weiterhin, besonders über sehr kurze Zeiträume.</p>
+    <p class="note">Rot = geschätzter Kalorienüberschuss, Blau = geschätztes Kaloriendefizit gegenüber dem eigenen Verbrauch &mdash; berechnet allein aus der Gewichtsänderung, nicht aus tatsächlich geloggtem Essen: Gewichtsänderung × 7700 kcal/kg (Wishnofsky 1958, "3500 kcal/lb"). Das bleibt in jedem Fall eine Bilanz (Über-/Unterschuss), keine gemessene Kalorienaufnahme; kurzfristige Wassereinlagerungen, Verdauungsinhalt und die natürliche Tag-zu-Tag-Schwankung des Gewichts verzerren das Ergebnis weiterhin, besonders über sehr kurze Zeiträume.</p>
   </div>
 
   <div class="card">
@@ -766,6 +767,60 @@ function weeklyTooltip(context, unit){
   showTooltip(rect.left + window.scrollX + tc.caretX, rect.top + window.scrollY + tc.caretY, html);
 }
 
+// 4-Wochen-Aggregation (Session 13, 31.08.2026, auf Nutzerwunsch: "fettmasse, muskelmasse,
+// knochen über 4 Wochen mitteln") — wie weeklyAgg(), aber vier Kalenderwochen (Montag-
+// Anfang) zu einem Block zusammengefasst statt einer einzelnen Woche. Block-Grenzen sind
+// an einen festen Referenzmontag (2018-01-01, tatsächlich ein Montag) gekoppelt, nicht an
+// den Beginn der jeweiligen Datenauswahl — dadurch bleiben die 4-Wochen-Blöcke stabil,
+// unabhängig davon, welcher Zeitraum gerade gefiltert ist (analog zur ISO-Wochenlogik von
+// weeklyAgg, nur in 4er-Gruppen). Genutzt von der Körperzusammensetzungs-Karte, um die
+// dort gezeigten Kurven (Fett-/Muskel-/Wasser-/Knochenmasse) stärker zu glätten als das
+// bisherige reine Wochenmittel.
+const FOUR_WEEK_REF_MONDAY = Date.UTC(2018, 0, 1); // 2018-01-01 ist ein Montag
+function fourWeekAgg(points, key){
+  const buckets = new Map();
+  points.forEach(p => {
+    const v = p[key];
+    if(v == null) return;
+    const d = parseISO(p.date);
+    const dow = d.getDay() === 0 ? 7 : d.getDay(); // Monday=1..Sunday=7
+    const monday = new Date(d); monday.setDate(d.getDate() - (dow - 1)); monday.setHours(0,0,0,0);
+    const weeksSinceRef = Math.floor((monday.getTime() - FOUR_WEEK_REF_MONDAY) / (7*86400000));
+    const blockIdx = Math.floor(weeksSinceRef / 4);
+    const blockStart = FOUR_WEEK_REF_MONDAY + blockIdx * 4 * 7 * 86400000;
+    if(!buckets.has(blockStart)) buckets.set(blockStart, []);
+    buckets.get(blockStart).push(v);
+  });
+  const blocks = [...buckets.entries()].map(([bk, vals]) => {
+    const n = vals.length;
+    const mean = vals.reduce((a,b)=>a+b,0) / n;
+    const variance = n > 1 ? vals.reduce((a,b)=>a+(b-mean)*(b-mean),0) / (n-1) : 0;
+    const std = Math.sqrt(variance);
+    return { x: bk, y: mean, yMin: mean - std, yMax: mean + std, n, std };
+  });
+  blocks.sort((a,b)=>a.x-b.x);
+  return blocks;
+}
+
+// Tooltip-Pendant zu weeklyTooltip, zeigt einen 28-Tage-Zeitraum statt einer Woche.
+function fourWeekTooltip(context, unit){
+  const tc = context.tooltip;
+  if(tc.opacity === 0){ hideTooltip(); return; }
+  if(!tc.dataPoints || !tc.dataPoints.length){ hideTooltip(); return; }
+  const rows = tc.dataPoints.map(dp => {
+    const raw = dp.raw;
+    const color = dp.dataset.borderColor;
+    const stdTxt = raw.std ? ` ± ${fmtNum(raw.std)}` : '';
+    return `<div class="t-row"><span class="t-key" style="background:${color}"></span><span class="t-name">${dp.dataset.label} (n=${raw.n})</span><span class="t-val">${fmtNum(raw.y)}${stdTxt} ${unit}</span></div>`;
+  }).join('');
+  const blockStart = new Date(tc.dataPoints[0].parsed.x);
+  const blockEnd = new Date(blockStart.getTime() + 27*86400000);
+  const html = `<div class="t-date">${fmtDateShort(blockStart)} – ${fmtDateShort(blockEnd)}</div>${rows}`;
+  const canvas = context.chart.canvas;
+  const rect = canvas.getBoundingClientRect();
+  showTooltip(rect.left + window.scrollX + tc.caretX, rect.top + window.scrollY + tc.caretY, html);
+}
+
 // ---------- stat tiles ----------
 // Beziehen sich per Klick auf die Hauptkurve oder das "Analyse-Datum"-Feld optional auf
 // ein historisches Datum statt auf den letzten Messtag ("Stand" statt "Aktuell") — siehe
@@ -822,37 +877,29 @@ function renderStats(){
     const calSign = avgKcal > 0 ? '+' : '';
     return `<span class="${calCls}">${calSign}${fmtNum(avgKcal,0)} kcal/Tag</span>`;
   }
-  // Kleines Modus-Suffix für die Kalorienbilanz-Kacheln: zeigt an, ob gewebespezifisch
-  // (Fett-/Muskelmasse, physikalisches Modell) oder auf die alte, vereinfachte
-  // Gewichts-Faustregel zurückgefallen wurde (siehe kcalPerDayFromDeltas oben).
-  function calorieModeSuffix(mode){
-    return mode === 'composition' ? ' · aus Fett-/Muskelmasse' : ' · vereinfacht (nur Gewicht)';
-  }
   const allAsOf = dailyAsOf();
 
-  // Letzte 7 Tage (Ø) — unverändert in der Fensterlogik (rollierendes 7-Tage-Rohtage-
-  // Fenster, kein Kalenderwochen-Mittel), asOf-bewusst über allAsOf; jetzt gewebespezifisch
-  // wenn möglich (siehe computeCalorieBalanceLastNDays).
+  // Letzte 7 Tage (Ø) — rollierendes 7-Tage-Rohtage-Fenster (kein Kalenderwochen-
+  // Mittel), asOf-bewusst über allAsOf, aus der reinen Gewichtsänderung berechnet.
   const r7 = computeCalorieBalanceLastNDays(allAsOf, 7);
   if(r7){
     tiles.push({
       label: 'Kalorienbilanz (7 Tage)',
       value: calorieTileHtml(r7.y),
-      delta: `<div class="delta flat">Ø letzte 7 Tage${calorieModeSuffix(r7.mode)}</div>`,
+      delta: `<div class="delta flat">Ø letzte 7 Tage</div>`,
     });
   }
 
   // Kalorienbilanz (4 Wochen): zentriertes ±3-Tage-Fenster (heute-Fenster vs. vor-28-
   // Tagen-Fenster) statt eines Mittels über vier Kalenderwochen-Deltas — macht diese
   // Kachel konsistent mit der gleichnamigen Mini-Kachel der Kalorienbilanz-Karte unten
-  // und dem entsprechenden Erkenntnisse-Satz (dieselbe Formel, dieselbe Zahl). Nutzt
-  // estimateKcalPerDayPhysical (gewebespezifisch, Fallback auf Gewicht).
-  const est4wk = estimateKcalPerDayPhysical(allAsOf, refTs, 28);
+  // und dem entsprechenden Erkenntnisse-Satz (dieselbe Formel, dieselbe Zahl).
+  const est4wk = estimateKcalPerDayFromWeight(allAsOf, refTs, 28);
   if(est4wk){
     tiles.push({
       label: 'Kalorienbilanz (4 Wochen)',
       value: calorieTileHtml(est4wk.kcalPerDay),
-      delta: `<div class="delta flat">Heute vs. vor 28 Tagen${calorieModeSuffix(est4wk.mode)}</div>`,
+      delta: `<div class="delta flat">Heute vs. vor 28 Tagen</div>`,
     });
   }
 
@@ -860,12 +907,12 @@ function renderStats(){
   // zur bereits bestehenden "Veränderung 60 Tage"-Kachel für die gewählte Kennzahl, jetzt
   // auch als Kalorienbilanz-Pendant. Konsistent mit der gleichnamigen Mini-Kachel der
   // Kalorienbilanz-Karte unten (dieselbe Formel, dieselbe Zahl).
-  const est60d = estimateKcalPerDayPhysical(allAsOf, refTs, 60);
+  const est60d = estimateKcalPerDayFromWeight(allAsOf, refTs, 60);
   if(est60d){
     tiles.push({
       label: 'Kalorienbilanz (60 Tage)',
       value: calorieTileHtml(est60d.kcalPerDay),
-      delta: `<div class="delta flat">Heute vs. vor 60 Tagen${calorieModeSuffix(est60d.mode)}</div>`,
+      delta: `<div class="delta flat">Heute vs. vor 60 Tagen</div>`,
     });
   }
 
@@ -911,12 +958,13 @@ function renderInsights(){
   const rows = [];
   function addRow(status, html){ rows.push(`<div class="insight-row"><span class="insight-dot ${status}"></span><span class="insight-text">${html}</span></div>`); }
 
-  // Weight trend — recent weeks only, so this doesn't wash out into a misleading
-  // full-range average when a long Zeitraum is selected (see weeklySlopePerMonth).
-  // Nutzt jetzt einen echten Regressions-t-Test (linRegWithP) statt eines festen
-  // |Steigung|<0,2-Schwellenwerts: ein Audit über alle historisch möglichen gleitenden
-  // 8-Wochen-Fenster zeigte, dass der feste Schwellenwert in ~24% der Fälle einen
-  // "Trend" gemeldet hätte, der statistisch nicht von Rauschen zu unterscheiden war.
+  // Weight trend — folgt seit Session 13 direkt dem gewählten Zeitraum-Filter (kein
+  // fixes 8-Wochen-Fenster mehr, siehe weeklySlopePerMonth): bei 30T/60T-Auswahl fließen
+  // entsprechend nur die Wochen dieses kurzen Fensters ein, bei 1J/Alle die komplette
+  // gewählte Historie. Nutzt einen echten Regressions-t-Test (linRegWithP) statt eines
+  // festen |Steigung|<0,2-Schwellenwerts: ein Audit über alle historisch möglichen
+  // gleitenden 8-Wochen-Fenster zeigte, dass der feste Schwellenwert in ~24% der Fälle
+  // einen "Trend" gemeldet hätte, der statistisch nicht von Rauschen zu unterscheiden war.
   const wTrend = weeklySlopePerMonth(points, 'weight');
   if(wTrend.slope != null){
     if(wTrend.p == null || wTrend.p >= TREND_P_THRESHOLD){
@@ -930,8 +978,9 @@ function renderInsights(){
   }
 
   // Trend-Robustheitscheck über mehrere Fensterlängen (Session 9, 30.08.2026): prüft,
-  // ob sich dieselbe Richtung wie oben (8-Wochen-Fenster) auch bei unabhängig gewählten
-  // längeren/kürzeren Fensterlängen zeigt — ein Trend, der nur bei einer bestimmten
+  // ob sich dieselbe Richtung wie oben (Zeitraum-Fenster, seit Session 13 variabel statt
+  // fix 8 Wochen) auch bei unabhängig gewählten längeren/kürzeren Fensterlängen zeigt —
+  // ein Trend, der nur bei einer bestimmten
   // Fensterwahl signifikant wird, ist ein deutlich schwächerer Befund als einer, der über
   // mehrere Fensterlängen hinweg übereinstimmt (siehe Statusdokument, Ad-hoc-Analyse vom
   // 30.08.2026). Nutzt bewusst die komplette asOf-gefilterte Historie (dailyAsOf()) statt
@@ -950,11 +999,11 @@ function renderInsights(){
       const windowsTxt = robustChecks.map(c=>c.weeks).join('/') + ' Wochen';
       const needForRobust = robustChecks.length > 2 ? robustChecks.length - 1 : robustChecks.length;
       if(primarySig && agreeing.length >= needForRobust){
-        addRow('good', `<strong>Robust:</strong> dieselbe Richtung bestätigt sich bei ${agreeing.length} von ${robustChecks.length} zusätzlich getesteten Fensterlängen (${windowsTxt}) ebenfalls statistisch signifikant — kein Artefakt der 8-Wochen-Fensterwahl.`);
+        addRow('good', `<strong>Robust:</strong> dieselbe Richtung bestätigt sich bei ${agreeing.length} von ${robustChecks.length} zusätzlich getesteten Fensterlängen (${windowsTxt}) ebenfalls statistisch signifikant — kein Artefakt der Fensterwahl des gewählten Zeitraums (${wTrend.n} Wochen).`);
       } else if(primarySig && agreeing.length >= 1){
         addRow('neutral', `Robustheitscheck: die Richtung bestätigt sich signifikant bei ${agreeing.length} von ${robustChecks.length} zusätzlich getesteten Fensterlängen (${windowsTxt}) — teilweise robust, nicht bei jeder Fensterwahl gleich stark ausgeprägt.`);
       } else if(primarySig){
-        addRow('warning', `Robustheitscheck: bei keiner der zusätzlich getesteten Fensterlängen (${windowsTxt}) zeigt sich derselbe signifikante Trend — der 8-Wochen-Befund oben sollte mit Vorsicht interpretiert werden.`);
+        addRow('warning', `Robustheitscheck: bei keiner der zusätzlich getesteten Fensterlängen (${windowsTxt}) zeigt sich derselbe signifikante Trend — der Befund oben (${wTrend.n} Wochen im gewählten Zeitraum) sollte mit Vorsicht interpretiert werden.`);
       } else if(agreeing.length >= 2){
         addRow('neutral', `Robustheitscheck: obwohl die letzten ${wTrend.n} Wochen für sich genommen keinen signifikanten Trend zeigen, ist bei ${agreeing.length} von ${robustChecks.length} längeren/kürzeren Fensterlängen (${windowsTxt}) ein Trend in dieselbe Richtung signifikant — möglicherweise hat sich die kurzfristige Entwicklung gerade abgeflacht.`);
       }
@@ -988,20 +1037,24 @@ function renderInsights(){
     }
   }
 
-  // Estimated calorie balance (recent 4 weeks) — jetzt über dasselbe zentrierte
-  // ±3-Tage-Fenster wie die "Kalorienbilanz (4 Wochen)"-Kachel im Statistik-Raster
-  // (heute-Fenster vs. vor-28-Tagen-Fenster) statt eines Mittels über vier
-  // Kalenderwochen-Deltas — beide Stellen zeigen dadurch bewusst dieselbe Zahl.
+  // Estimated calorie balance — folgt seit Session 13 dem gewählten Zeitraum-Filter
+  // (auf Nutzerwunsch "Erkenntnisse müssen ebenfalls auf den Zeitraum angepasst
+  // werden") statt eines fixen 28-Tage-Fensters: `spanDays` (oben bei "Tracking
+  // consistency" berechnet, = tatsächliche Tagesspanne der Zeitraum-gefilterten
+  // `points`) steuert jetzt das Vergleichsfenster von estimateKcalPerDayFromWeight().
+  // Bewusst NICHT mehr an die feste "Kalorienbilanz (4 Wochen)"-Kachel im
+  // Statistik-Raster gekoppelt (die bleibt als benannter fixer Referenzwert bei 28
+  // Tagen bestehen, siehe renderStats()) — bei einer von "4 Wochen" abweichenden
+  // Zeitraum-Auswahl zeigen Kachel und dieser Erkenntnis-Satz jetzt bewusst
+  // unterschiedliche Zahlen (Kachel = fixer Vergleichswert, Satz = gewählter Zeitraum).
   {
     const refTsIns = parseISO(refDate()).getTime();
-    const est4wkIns = estimateKcalPerDayPhysical(points, refTsIns, 28);
+    const est4wkIns = estimateKcalPerDayFromWeight(points, refTsIns, spanDays);
     if(est4wkIns){
       const kcalPerDay = est4wkIns.kcalPerDay;
       const label = kcalPerDay >= 0 ? 'geschätzter Überschuss' : 'geschätztes Defizit';
-      const basis = est4wkIns.mode === 'composition'
-        ? `aus Fett- (${est4wkIns.deltaFat>=0?'+':''}${fmtNum(est4wkIns.deltaFat)} kg × ${FAT_KCAL_PER_KG} kcal/kg) und Muskelmasseänderung (${est4wkIns.deltaMuscle>=0?'+':''}${fmtNum(est4wkIns.deltaMuscle)} kg × ${LEAN_KCAL_PER_KG} kcal/kg) abgeleitet, physikalisches Modell`
-        : `aus der Gewichtsveränderung abgeleitet (vereinfacht, Körperzusammensetzung für diesen Zeitraum unvollständig)`;
-      addRow('neutral', `In den letzten 4 Wochen im Schnitt ein <strong>${label} von ${fmtNum(Math.abs(kcalPerDay),0)} kcal/Tag</strong> (${basis}, siehe Kalorienbilanz unten).`);
+      const rangeTxt = state.range === 'all' ? `im gesamten aufgezeichneten Zeitraum (${spanDays} Tage)` : `in den letzten ${spanDays} Tagen (gewählter Zeitraum)`;
+      addRow('neutral', `${rangeTxt.charAt(0).toUpperCase()}${rangeTxt.slice(1)} im Schnitt ein <strong>${label} von ${fmtNum(Math.abs(kcalPerDay),0)} kcal/Tag</strong> (aus der Gewichtsänderung abgeleitet, 1 kg ≈ ${KCAL_PER_KG} kcal, siehe Kalorienbilanz unten).`);
     }
   }
 
@@ -1095,18 +1148,16 @@ function renderInsights(){
   {
     const weightAllAsOf = dailyAsOf();
     const refTsY = parseISO(refDate()).getTime();
-    const estY = estimateKcalPerDayPhysical(weightAllAsOf, refTsY, 365);
+    const estY = estimateKcalPerDayFromWeight(weightAllAsOf, refTsY, 365);
     if(estY){
       const deltaKg = estY.deltaWeight;
       const kcalPerDay = estY.kcalPerDay;
       const sign = kcalPerDay >= 0 ? '+' : '';
-      const modeNote = estY.mode === 'composition' ? '' : ' (vereinfacht, Körperzusammensetzung vor einem Jahr unvollständig)';
       if(deltaKg != null && Math.abs(kcalPerDay) < 50){
-        addRow('good', `Im Vergleich zum Vorjahr ist das Gewicht mit ${deltaKg>=0?'+':''}${fmtNum(deltaKg)} kg fast unverändert &mdash; übers Jahr gemittelt ergibt das rechnerisch eine <strong>nahezu ausgeglichene Kalorienbilanz</strong> (${sign}${fmtNum(kcalPerDay,1)} kcal/Tag${modeNote}). Kurzfristige Defizit-/Überschussphasen (siehe oben) gleichen sich demnach über das Jahr weitgehend aus.`);
+        addRow('good', `Im Vergleich zum Vorjahr ist das Gewicht mit ${deltaKg>=0?'+':''}${fmtNum(deltaKg)} kg fast unverändert &mdash; übers Jahr gemittelt ergibt das rechnerisch eine <strong>nahezu ausgeglichene Kalorienbilanz</strong> (${sign}${fmtNum(kcalPerDay,1)} kcal/Tag). Kurzfristige Defizit-/Überschussphasen (siehe oben) gleichen sich demnach über das Jahr weitgehend aus.`);
       } else {
         const label2 = kcalPerDay >= 0 ? 'ein geschätzter Überschuss' : 'ein geschätztes Defizit';
-        const deltaNote = deltaKg != null ? `${deltaKg>=0?'+':''}${fmtNum(deltaKg)} kg ggü. vor rund einem Jahr` : 'Fett-/Muskelmasse ggü. vor rund einem Jahr';
-        addRow('neutral', `Im Jahresvergleich (${deltaNote}) ergibt sich im Mittel <strong>${label2} von rund ${fmtNum(Math.abs(kcalPerDay),0)} kcal/Tag</strong> über den gesamten Zeitraum${modeNote}.`);
+        addRow('neutral', `Im Jahresvergleich (${deltaKg>=0?'+':''}${fmtNum(deltaKg)} kg ggü. vor rund einem Jahr) ergibt sich im Mittel <strong>${label2} von rund ${fmtNum(Math.abs(kcalPerDay),0)} kcal/Tag</strong> über den gesamten Zeitraum.`);
       }
     }
   }
@@ -1487,7 +1538,7 @@ function renderCompChart(){
 
   keys.forEach(k => {
     document.getElementById('compSwatch-'+k).style.background = colors[k];
-    const weeks = weeklyAgg(points, k);
+    const blocks = fourWeekAgg(points, k);
     const ctx = document.getElementById('compChart-'+k).getContext('2d');
     if(compCharts[k]) compCharts[k].destroy();
     compCharts[k] = new Chart(ctx, {
@@ -1495,7 +1546,7 @@ function renderCompChart(){
       data: {
         datasets: [{
           label: labels[k],
-          data: weeks,
+          data: blocks,
           borderColor: colors[k], backgroundColor: colors[k] + '1a',
           borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.15, fill:true, spanGaps: true,
           errorBar: state.errorBars, errorBarColor: colors[k],
@@ -1506,7 +1557,7 @@ function renderCompChart(){
         interaction: { mode: 'index', intersect: false },
         plugins: {
           legend: { display:false },
-          tooltip: { enabled:false, external: (context) => weeklyTooltip(context, 'kg') }
+          tooltip: { enabled:false, external: (context) => fourWeekTooltip(context, 'kg') }
         },
         scales: {
           x: {
@@ -1631,12 +1682,18 @@ function pairedWeeklyCorrelation(points, key){
   return { paired, r: pearsonR(paired.map(p=>p.x), paired.map(p=>p.y)) };
 }
 // Weekly-aggregate slope for a metric, expressed as a per-30-day-month rate.
-// Capped to the most recent `maxWeeks` so a long Zeitraum selection (6M/1J/Alle) reports
-// the CURRENT direction rather than a single line fit across a non-monotonic multi-year
-// span (which can read as "rising" even while the last 90 days are falling).
-function weeklySlopePerMonth(points, key, maxWeeks=8){
+// `maxWeeks=null` (Standard seit Session 13, auf Nutzerwunsch "Erkenntnisse müssen
+// ebenfalls auf den Zeitraum angepasst werden"): nutzt ALLE Wochen der übergebenen
+// (bereits Zeitraum-gefilterten) `points` — die Gewichtstrend- und Fett-/Muskelmasse-
+// Erkenntnisse unten folgen dadurch jetzt genau dem gewählten Zeitraum-Filter (30T/60T/
+// 90T/6M/1J/Alle), statt immer nur die letzten 8 Wochen zu zeigen. Ein explizites
+// `maxWeeks` bleibt für Fälle nötig, die BEWUSST unabhängig vom Zeitraum-Filter auf ein
+// festes Fenster schauen sollen (siehe Trend-Robustheitscheck weiter unten, der explizit
+// 6/12/26-Wochen-Fenster auf der kompletten Historie testet, unabhängig vom
+// Zeitraum-Filter).
+function weeklySlopePerMonth(points, key, maxWeeks=null){
   const allWeeks = weeklyAgg(points, key);
-  const weeks = allWeeks.slice(-maxWeeks);
+  const weeks = maxWeeks != null ? allWeeks.slice(-maxWeeks) : allWeeks;
   if(weeks.length < 3) return { slope: null, n: weeks.length, p: null };
   // Wochenmittel sind (anders als Tageswerte) deutlich weniger autokorreliert — ein
   // Standard-t-Test (linRegWithP) auf die Regressions-Steigung reicht hier aus, ein
@@ -1736,74 +1793,44 @@ function corrTooltip(context, metric){
   showTooltip(rect.left + window.scrollX + tc.caretX, rect.top + window.scrollY + tc.caretY, html);
 }
 
-// ---------- estimated caloric balance, derived from weight/body-composition change ----------
-// Physikalisches Modell (Session 12, 31.08.2026): eine Gewichtsänderung ist kein
-// homogenes Gewebe — sie setzt sich aus Fettmasse, fettfreier (v.a. Muskel-)Masse und
-// Körperwasser zusammen, und diese drei haben sehr unterschiedliche Energiedichten.
-// Die bis Session 11 verwendete Faustregel (1 kg Gewichtsänderung ≈ 7700 kcal, nach
-// Wishnofsky 1958 "3500 kcal/lb") unterstellt implizit, dass JEDE Gewichtsänderung
-// reines Fettgewebe ist — das ist bei kurzfristigen Schwankungen (Wasserhaushalt,
-// Glykogen-gebundenes Wasser, Verdauungsinhalt) physikalisch falsch: Wasser hat keinen
-// Brennwert, wiegt aber genauso viel wie Fett. Da das Dashboard über die Withings-
-// Bioimpedanzmessung bereits Fett- und Muskelmasse (kg) getrennt von Wasser und
-// Knochenmasse erfasst (siehe METRIC_LABELS), wird hier — wo für beide Vergleichspunkte
-// vorhanden — stattdessen gewebespezifisch gerechnet:
-//   ΔEnergie ≈ ΔFettmasse × FAT_KCAL_PER_KG + ΔMuskelmasse × LEAN_KCAL_PER_KG
-// Wasser- und Knochenmasseänderungen fließen bewusst mit 0 kcal/kg ein (kein Brennwert).
-// Energiedichten nach dem etablierten dynamischen Energiebilanzmodell von Hall et al.
-// (2011, "Quantification of the effect of energy imbalance on bodyweight"): Fettgewebe
-// ≈ 9400 kcal/kg (nahe am reinen Triglycerid-Brennwert von ~9441 kcal/kg), fettfreie
-// Masse (überwiegend Muskelprotein + zugehöriges Wasser) ≈ 1100 kcal/kg — deutlich
-// weniger als Fett, da Muskelgewebe zu rund drei Vierteln aus (kalorienfreiem) Wasser
-// besteht. Fehlt für einen Vergleichszeitpunkt Körperzusammensetzung (ältere/lückenhafte
-// Messungen), wird transparent auf die alte, vereinfachte Gewichts-Methode (7700 kcal/kg)
-// zurückgefallen — jede Rückgabestruktur trägt dafür ein `mode`-Feld ('composition' vs.
-// 'weight'), das die aufrufenden Render-Funktionen zur Kennzeichnung in der UI nutzen.
-const FAT_KCAL_PER_KG = 9400;
-const LEAN_KCAL_PER_KG = 1100;
-const KCAL_PER_KG = 7700; // Fallback-Faustregel (Wishnofsky), nur wenn Fett-/Muskeldaten fehlen
+// ---------- estimated caloric balance, derived from weight change ----------
+// Session 13 (31.08.2026, auf ausdrücklichen Nutzerwunsch): die Kalorienbilanz wird
+// wieder ausschließlich aus der Gewichtsänderung berechnet, NICHT mehr aus Fett-/
+// Muskelmasse. Das in Session 12 eingeführte gewebespezifische Modell (Fett ≈ 9400
+// kcal/kg, Muskel ≈ 1100 kcal/kg) wurde dafür komplett entfernt — Nutzeranfrage: "die
+// kalorienbilanz soll aus den gewichtsunterschieden berechnet werden und nicht aus
+// fettmasse". Grundlage jetzt wieder die einfache Faustregel (Wishnofsky 1958,
+// "3500 kcal/lb"): 1 kg Gewichtsänderung ≈ 7700 kcal.
+const KCAL_PER_KG = 7700;
 let calorieChart;
 
-// Gemeinsamer Kern: aus zwei Mittelwert-Objekten (je {fat,muscle,weight}, wie von den
-// beiden konkreten Helfern unten geliefert) die kcal/Tag-Schätzung ableiten — bevorzugt
-// gewebespezifisch, sonst Gewichts-Fallback.
-function kcalPerDayFromDeltas(nowVals, pastVals, days){
-  if(nowVals.fat != null && pastVals.fat != null && nowVals.muscle != null && pastVals.muscle != null){
-    const deltaFat = nowVals.fat - pastVals.fat;
-    const deltaMuscle = nowVals.muscle - pastVals.muscle;
-    const kcalPerDay = (deltaFat * FAT_KCAL_PER_KG + deltaMuscle * LEAN_KCAL_PER_KG) / days;
-    return { kcalPerDay, mode: 'composition', deltaFat, deltaMuscle, deltaWeight: nowVals.weight != null && pastVals.weight != null ? nowVals.weight - pastVals.weight : null };
-  }
-  if(nowVals.weight == null || pastVals.weight == null) return null;
-  const deltaWeight = nowVals.weight - pastVals.weight;
+// Gemeinsamer Kern: kcal/Tag-Schätzung aus zwei Gewichtsmittelwerten und der Anzahl
+// Tage dazwischen.
+function kcalPerDayFromWeights(nowWeight, pastWeight, days){
+  if(nowWeight == null || pastWeight == null || !days) return null;
+  const deltaWeight = nowWeight - pastWeight;
   const kcalPerDay = (deltaWeight * KCAL_PER_KG) / days;
-  return { kcalPerDay, mode: 'weight', deltaFat: null, deltaMuscle: null, deltaWeight };
+  return { kcalPerDay, deltaWeight };
 }
 
 function computeCalorieBalance(points){
   const weeksW = weeklyAgg(points, 'weight');
-  const fatByX = new Map(weeklyAgg(points, 'fat').map(w => [w.x, w.y]));
-  const muscleByX = new Map(weeklyAgg(points, 'muscle').map(w => [w.x, w.y]));
   const rows = [];
   for(let i=1;i<weeksW.length;i++){
     const prev = weeksW[i-1], cur = weeksW[i];
     const days = (cur.x - prev.x) / 86400000;
     if(days <= 0) continue;
-    const nowVals = { weight: cur.y, fat: fatByX.has(cur.x) ? fatByX.get(cur.x) : null, muscle: muscleByX.has(cur.x) ? muscleByX.get(cur.x) : null };
-    const pastVals = { weight: prev.y, fat: fatByX.has(prev.x) ? fatByX.get(prev.x) : null, muscle: muscleByX.has(prev.x) ? muscleByX.get(prev.x) : null };
-    const est = kcalPerDayFromDeltas(nowVals, pastVals, days);
+    const est = kcalPerDayFromWeights(cur.y, prev.y, days);
     if(!est) continue;
-    rows.push({ x: cur.x, y: Math.round(est.kcalPerDay), deltaKg: cur.y - prev.y, deltaFat: est.deltaFat, deltaMuscle: est.deltaMuscle, mode: est.mode, days });
+    rows.push({ x: cur.x, y: Math.round(est.kcalPerDay), deltaKg: est.deltaWeight, days });
   }
   return rows;
 }
 
-// Rollierende Kurzfrist-Bilanz — vergleicht den Mittelwert der letzten `days` Tage mit
-// dem Mittelwert der `days` Tage davor, gewebespezifisch wenn für beide Fenster genug
-// Fett-/Muskelmessungen vorliegen (Mittel über alle vorhandenen Tageswerte je Fenster),
-// sonst Gewichts-Fallback (gleiche Grundformel wie computeCalorieBalance). Robuster als
-// ein einzelner Tageswert, aber aktueller als die wochenbasierte "Aktuelle Woche"-Kachel
-// (die bei einer gerade erst begonnenen Kalenderwoche nur wenige Tage enthalten kann).
+// Rollierende Kurzfrist-Bilanz — vergleicht den Gewichtsmittelwert der letzten `days`
+// Tage mit dem Mittelwert der `days` Tage davor. Robuster als ein einzelner Tageswert,
+// aber aktueller als die wochenbasierte "Aktuelle Woche"-Kachel (die bei einer gerade
+// erst begonnenen Kalenderwoche nur wenige Tage enthalten kann).
 function computeCalorieBalanceLastNDays(points, days){
   const sorted = points.filter(d => d.weight != null).slice().sort((a,b) => parseISO(a.date) - parseISO(b.date));
   if(!sorted.length) return null;
@@ -1813,33 +1840,21 @@ function computeCalorieBalanceLastNDays(points, days){
   const recent = sorted.filter(d => parseISO(d.date).getTime() >= cutRecent);
   const prior = sorted.filter(d => { const t = parseISO(d.date).getTime(); return t >= cutPrior && t < cutRecent; });
   if(!recent.length || !prior.length) return null;
-  const meanOf = (arr, key) => { const vals = arr.map(d => d[key]).filter(v => v != null); return vals.length ? vals.reduce((a,b)=>a+b,0) / vals.length : null; };
-  const nowVals = { weight: meanOf(recent,'weight'), fat: meanOf(recent,'fat'), muscle: meanOf(recent,'muscle') };
-  const pastVals = { weight: meanOf(prior,'weight'), fat: meanOf(prior,'fat'), muscle: meanOf(prior,'muscle') };
-  const est = kcalPerDayFromDeltas(nowVals, pastVals, days);
+  const meanOf = arr => arr.reduce((a,d)=>a+d.weight,0) / arr.length;
+  const est = kcalPerDayFromWeights(meanOf(recent), meanOf(prior), days);
   if(!est) return null;
-  return { y: Math.round(est.kcalPerDay), deltaKg: est.deltaWeight, deltaFat: est.deltaFat, deltaMuscle: est.deltaMuscle, mode: est.mode, n: recent.length };
+  return { y: Math.round(est.kcalPerDay), deltaKg: est.deltaWeight, n: recent.length };
 }
 
 // Wie computeCalorieBalanceLastNDays, aber auf Basis zweier zentrierter ±3-Tage-Fenster
 // (centeredWindowAvg) statt roher Tages-Mittel — gemeinsam genutzt von den Statistik-
 // Kacheln, der Kalorienbilanz-Karte und den Erkenntnis-Sätzen, damit alle drei Stellen
 // für denselben Referenzzeitpunkt exakt dieselbe Zahl zeigen (etabliertes Muster seit
-// Session 10). `all` sind ungefilterte Tagesdatensätze (dailyAsOf() o.ä.) — die einzelnen
-// centeredWindowAvg-Aufrufe filtern selbst je nach Kennzahl (weight/fat/muscle) auf
-// vorhandene Werte.
-function estimateKcalPerDayPhysical(all, refTs, windowDays){
-  const now = {
-    weight: centeredWindowAvg(all, 'weight', refTs, refTs)?.mean ?? null,
-    fat: centeredWindowAvg(all, 'fat', refTs, refTs)?.mean ?? null,
-    muscle: centeredWindowAvg(all, 'muscle', refTs, refTs)?.mean ?? null,
-  };
-  const past = {
-    weight: centeredWindowAvg(all, 'weight', refTs - windowDays*86400000, refTs)?.mean ?? null,
-    fat: centeredWindowAvg(all, 'fat', refTs - windowDays*86400000, refTs)?.mean ?? null,
-    muscle: centeredWindowAvg(all, 'muscle', refTs - windowDays*86400000, refTs)?.mean ?? null,
-  };
-  return kcalPerDayFromDeltas(now, past, windowDays);
+// Session 10). `all` sind ungefilterte Tagesdatensätze (dailyAsOf() o.ä.).
+function estimateKcalPerDayFromWeight(all, refTs, windowDays){
+  const now = centeredWindowAvg(all, 'weight', refTs, refTs)?.mean ?? null;
+  const past = centeredWindowAvg(all, 'weight', refTs - windowDays*86400000, refTs)?.mean ?? null;
+  return kcalPerDayFromWeights(now, past, windowDays);
 }
 
 // ---------- Frequenzanalyse der Gewichtsschwankung (Lomb-Scargle) ----------
@@ -2365,16 +2380,13 @@ function renderCalorieChart(){
   // denselben Referenzzeitpunkt dieselbe Zahl zeigen.
   const allAsOfCal = dailyAsOf();
   const refTsCal = parseISO(refDate()).getTime();
-  // Modus-Suffix wie bei den Statistik-Kacheln (siehe calorieModeSuffix in renderStats) —
-  // hier lokal dupliziert, da renderCalorieChart() eine eigene Funktion ist.
-  const calModeSuffix = mode => mode === 'composition' ? ' · aus Fett-/Muskelmasse' : ' · vereinfacht (nur Gewicht)';
 
   const weekEl = document.getElementById('calorieStatWeek');
   if(weekEl){
-    const estWeek = estimateKcalPerDayPhysical(allAsOfCal, refTsCal, 7);
+    const estWeek = estimateKcalPerDayFromWeight(allAsOfCal, refTsCal, 7);
     if(estWeek){
       weekEl.textContent = `${estWeek.kcalPerDay>=0?'+':''}${fmtNum(estWeek.kcalPerDay,0)} kcal/Tag`;
-      weekEl.title = `${isHistoricalAsOf() ? 'Stand' : 'Aktuelle Woche'} um ${fmtDateShort(parseISO(refDate()))}${calModeSuffix(estWeek.mode)}`;
+      weekEl.title = `${isHistoricalAsOf() ? 'Stand' : 'Aktuelle Woche'} um ${fmtDateShort(parseISO(refDate()))}`;
     } else {
       weekEl.textContent = '–';
       weekEl.title = '';
@@ -2385,7 +2397,7 @@ function renderCalorieChart(){
     const r7 = computeCalorieBalanceLastNDays(allAsOfCal, 7);
     if(r7){
       sevenDayEl.textContent = `${r7.y>=0?'+':''}${fmtNum(r7.y,0)} kcal/Tag`;
-      sevenDayEl.title = `Letzte 7 Tage (Ø ${r7.n} Messtage) vs. die 7 Tage davor${calModeSuffix(r7.mode)}`;
+      sevenDayEl.title = `Letzte 7 Tage (Ø ${r7.n} Messtage) vs. die 7 Tage davor`;
     } else {
       sevenDayEl.textContent = '–';
       sevenDayEl.title = '';
@@ -2393,10 +2405,10 @@ function renderCalorieChart(){
   }
   const fourWkEl = document.getElementById('calorieStat4wk');
   if(fourWkEl){
-    const est4wkCal = estimateKcalPerDayPhysical(allAsOfCal, refTsCal, 28);
+    const est4wkCal = estimateKcalPerDayFromWeight(allAsOfCal, refTsCal, 28);
     if(est4wkCal){
       fourWkEl.textContent = `${est4wkCal.kcalPerDay>=0?'+':''}${fmtNum(est4wkCal.kcalPerDay,0)} kcal/Tag`;
-      fourWkEl.title = `Heute vs. vor 28 Tagen${calModeSuffix(est4wkCal.mode)}`;
+      fourWkEl.title = `Heute vs. vor 28 Tagen`;
     } else {
       fourWkEl.textContent = '–';
       fourWkEl.title = '';
@@ -2407,10 +2419,10 @@ function renderCalorieChart(){
   // für Gewicht/Kennzahlen — hier dieselbe Fensterbreite für die Kalorienbilanz ergänzt.
   const sixtyDayEl = document.getElementById('calorieStat60d');
   if(sixtyDayEl){
-    const est60dCal = estimateKcalPerDayPhysical(allAsOfCal, refTsCal, 60);
+    const est60dCal = estimateKcalPerDayFromWeight(allAsOfCal, refTsCal, 60);
     if(est60dCal){
       sixtyDayEl.textContent = `${est60dCal.kcalPerDay>=0?'+':''}${fmtNum(est60dCal.kcalPerDay,0)} kcal/Tag`;
-      sixtyDayEl.title = `Heute vs. vor 60 Tagen${calModeSuffix(est60dCal.mode)}`;
+      sixtyDayEl.title = `Heute vs. vor 60 Tagen`;
     } else {
       sixtyDayEl.textContent = '–';
       sixtyDayEl.title = '';
@@ -2425,10 +2437,7 @@ function renderCalorieChart(){
       datasets: [{
         label: 'Kalorienbilanz',
         data: rows,
-        // Balken mit Gewichts-Fallback (mode:'weight', keine Fett-/Muskeldaten für diese
-        // Woche vorhanden) werden blasser dargestellt als gewebespezifisch berechnete
-        // Balken — signalisiert die geringere methodische Verlässlichkeit direkt im Chart.
-        backgroundColor: rows.map(r => (r.y >= 0 ? posColor : negColor) + (r.mode === 'composition' ? 'cc' : '55')),
+        backgroundColor: rows.map(r => (r.y >= 0 ? posColor : negColor) + 'cc'),
         borderRadius: 4,
         barThickness: 10,
       }]
@@ -2462,14 +2471,9 @@ function calorieTooltip(context){
   if(tc.opacity === 0){ hideTooltip(); return; }
   if(!tc.dataPoints || !tc.dataPoints.length){ hideTooltip(); return; }
   const raw = tc.dataPoints[0].raw;
-  const compRows = raw.mode === 'composition'
-    ? `<div class="t-row"><span class="t-name">Δ Fettmasse</span><span class="t-val">${raw.deltaFat>=0?'+':''}${fmtNum(raw.deltaFat)} kg</span></div>
-    <div class="t-row"><span class="t-name">Δ Muskelmasse</span><span class="t-val">${raw.deltaMuscle>=0?'+':''}${fmtNum(raw.deltaMuscle)} kg</span></div>`
-    : `<div class="t-row"><span class="t-name">Methode</span><span class="t-val">vereinfacht (nur Gewicht)</span></div>`;
   const html = `<div class="t-date">Woche bis ${fmtDateShort(new Date(raw.x))}</div>
     <div class="t-row"><span class="t-name">Bilanz</span><span class="t-val">${raw.y>=0?'+':''}${fmtNum(raw.y,0)} kcal/Tag</span></div>
-    <div class="t-row"><span class="t-name">Gewichtsänderung</span><span class="t-val">${raw.deltaKg>=0?'+':''}${fmtNum(raw.deltaKg)} kg</span></div>
-    ${compRows}`;
+    <div class="t-row"><span class="t-name">Gewichtsänderung</span><span class="t-val">${raw.deltaKg>=0?'+':''}${fmtNum(raw.deltaKg)} kg</span></div>`;
   const canvas = context.chart.canvas;
   const rect = canvas.getBoundingClientRect();
   showTooltip(rect.left + window.scrollX + tc.caretX, rect.top + window.scrollY + tc.caretY, html);
